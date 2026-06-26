@@ -56,23 +56,24 @@ syncRoute.post('/api/sync/twitch', async (c) => {
  * Sequentially trigger sync for all sources
  */
 syncRoute.post('/api/sync/all', async (c) => {
-  try {
-    const force = c.req.query('force') === 'true';
+  const force = c.req.query('force') === 'true';
 
-    console.log(`Starting global sync (force=${force})...`);
-    const holodexResults = await syncFromHolodex(undefined, force);
-    const youtubeResults = await syncFromYoutube(undefined, force);
-    const twitchResults = await syncFromTwitch(undefined, force);
+  const [holodex, youtube, twitch] = await Promise.allSettled([
+    syncFromHolodex(undefined, force),
+    syncFromYoutube(undefined, force),
+    syncFromTwitch(undefined, force),
+  ]);
 
-    return c.json({
-      success: true,
-      summary: {
-        holodex: { count: holodexResults.length, details: holodexResults },
-        youtube: { count: youtubeResults.length, details: youtubeResults },
-        twitch: { count: twitchResults.length, details: twitchResults },
-      }
-    });
-  } catch (error) {
-    return c.json({ error: 'Global sync failed', detail: String(error) }, 500);
-  }
+  const summarize = (result: PromiseSettledResult<any>) =>
+    result.status === 'fulfilled'
+      ? { ok: true, count: result.value.length, details: result.value }
+      : { ok: false, error: String(result.reason) };
+
+  return c.json({
+    summary: {
+      holodex: summarize(holodex),
+      youtube: summarize(youtube),
+      twitch: summarize(twitch),
+    },
+  });
 });
