@@ -1,0 +1,10 @@
+@baseUrl = http://localhost:3000
+
+### HoloDex - fetch raw videos for Usada Pekora's channel
+GET {{baseUrl}}/sync/test/holodex
+
+### YouTube Data API - fetch raw channel data for the same channel
+GET {{baseUrl}}/sync/test/youtube
+
+### Twitch - resolve login to user_id, then fetch raw videos
+GET {{baseUrl}}/sync/test/twitch

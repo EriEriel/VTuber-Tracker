@@ -1,0 +1,292 @@
+--- HOLODEX CHANNEL ---
+Channel keys: [
+  "id", "name", "english_name", "description", "photo", "thumbnail", "banner", "org", "suborg", "lang",
+  "published_at", "view_count", "video_count", "subscriber_count", "comments_crawled_at", "updated_at",
+  "yt_uploads_id", "crawled_at", "type", "clip_count", "twitter", "inactive", "created_at", "top_topics",
+  "yt_handle", "twitch", "yt_name_history", "extra_ids", "index_all", "group"
+]
+Channel sample: {
+  "id": "UC1DCedRgGHBdm81E1llLhOQ",
+  "name": "Pekora Ch. 兎田ぺこら",
+  "english_name": "Usada Pekora",
+  "photo": "https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s800-c-k-c0x00ffffff-no-rj",
+  "org": "Hololive",
+  "suborg": "ea3rd Generation (Fantasy)",
+  "video_count": 2644,
+  "subscriber_count": 2780000,
+  "view_count": 1139715916
+}
+--- HOLODEX VIDEOS ---
+Video keys: [ "id", "title", "type", "published_at", "available_at", "duration", "status", "channel" ]
+Video sample: {
+  "id": "FTjEZFjDIV0",
+  "title": "【配信予定】ぺこ!【ホロライブ/兎田ぺこら】",
+  "type": "stream",
+  "published_at": "2026-06-26T08:17:56.000Z",
+  "available_at": "2026-06-26T12:00:00.000Z",
+  "duration": 0,
+  "status": "upcoming",
+  "channel": {
+    "id": "UC1DCedRgGHBdm81E1llLhOQ",
+    "name": "Pekora Ch. 兎田ぺこら",
+    "org": "Hololive",
+    "suborg": "ea3rd Generation (Fantasy)",
+    "type": "vtuber",
+    "photo": "https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s800-c-k-c0x00ffffff-no-rj",
+    "english_name": "Usada Pekora"
+  }
+}
+--- HOLODEX CLIPS ---
+Clip keys: [ "id", "title", "type", "published_at", "available_at", "duration", "status", "lang",
+  "channel"
+]
+Clip sample: {
+  "id": "3NknCPqHYuA",
+  "title": "【サッカーW杯】守護神ザイオンの大活躍,前田選手のゴールなど,日本vsスウェーデン戦を見て大興奮のぺこヴィヴィ＋来訪するキアラ【ホロライブ 切り抜き/兎田ぺこら/綺々羅々ヴィヴィ】",
+  "type": "clip",
+  "published_at": "2026-06-26T01:26:40.000Z",
+  "available_at": "2026-06-26T01:26:40.000Z",
+  "duration": 848,
+  "status": "past",
+  "lang": "ja",
+  "channel": {
+    "id": "UCpauj0D8-X-8yzrF90sFHZQ",
+    "name": "せん【ホロライブ切り抜き】",
+    "type": "subber",
+    "photo": "https://yt3.ggpht.com/1G9dONjNgRCfLXtpCDNzH22OHykYohttn8tEtyJYYp_m1S_4wIymZQfLojm-oUQ84JqCgV6H=s800-c-k-c0x00ffffff-no-rj"
+  }
+}
+--- YOUTUBE CHANNEL ---
+Channel keys: [ "kind", "etag", "id", "snippet", "statistics" ]
+Channel snippet keys: [ "title", "description", "customUrl", "publishedAt", "thumbnails", "localized",
+  "country"
+]
+Channel statistics keys: [ "viewCount", "subscriberCount", "hiddenSubscriberCount", "videoCount" ]
+Channel sample: {
+  "id": "UC1DCedRgGHBdm81E1llLhOQ",
+  "title": "Pekora Ch. 兎田ぺこら",
+  "thumbnails": {
+    "default": {
+      "url": "https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s88-c-k-c0x00ffffff-no-rj",
+      "width": 88,
+      "height": 88
+    },
+    "medium": {
+      "url": "https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s240-c-k-c0x00ffffff-no-rj",
+      "width": 240,
+      "height": 240
+    },
+    "high": {
+      "url": "https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s800-c-k-c0x00ffffff-no-rj",
+      "width": 800,
+      "height": 800
+    }
+  },
+  "subscriberCount": "2780000",
+  "viewCount": "1139715916"
+}
+--- YOUTUBE VIDEOS (recent uploads playlist) ---
+PlaylistItem keys: [ "kind", "etag", "id", "snippet" ]
+PlaylistItem snippet keys: [
+  "publishedAt", "channelId", "title", "description", "thumbnails", "channelTitle", "playlistId",
+  "position", "resourceId", "videoOwnerChannelTitle", "videoOwnerChannelId"
+]
+PlaylistItem sample: {
+  "publishedAt": "2026-06-26T09:00:18Z",
+  "channelId": "UC1DCedRgGHBdm81E1llLhOQ",
+  "title": "【超自然スクワッド】怪異の襲撃でパニック!? 予測不能なハプニングの連続でまさかの犠牲者が発生…！？ #shorts #hololive",
+  "description": "暗闇に潜む怪異に立ち向かいながら、仲間とお宝を探し出す！\nようやく出口を発見！？と思いきや、まさかの偽物の扉に捕まって大ピンチに！？\n命からがら脱出を試みるものの、次々と襲いかかるハプニングに大混乱……！\nみんなも『超自然スクワッド』で、一緒にお宝探しを楽しんでね～！\nゲームのダウンロードはこちら！→https://tbs.onelink.me/s6WV/yzf8gu2u\n#超自然スクワッド #PR\n\n⋈ －－－－－－－－－－－－－－－－－－－－－⋈\n\n※ホロライブプロダクションから未成年の視聴者の方々へのお願い\n[カバー 未成年者の方々へ]で検索してお読みいただくか、下記リンクをご確認の上、\nお楽しみください。\nhttps://hololivepro.com/request-to-minors/",
+  "thumbnails": {
+    "default": {
+      "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/default.jpg",
+      "width": 120,
+      "height": 90
+    },
+    "medium": {
+      "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/mqdefault.jpg",
+      "width": 320,
+      "height": 180
+    },
+    "high": {
+      "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/hqdefault.jpg",
+      "width": 480,
+      "height": 360
+    },
+    "standard": {
+      "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/sddefault.jpg",
+      "width": 640,
+      "height": 480
+    },
+    "maxres": {
+      "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/maxresdefault.jpg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "channelTitle": "Pekora Ch. 兎田ぺこら",
+  "playlistId": "UU1DCedRgGHBdm81E1llLhOQ",
+  "position": 0,
+  "resourceId": {
+    "kind": "youtube#video",
+    "videoId": "jCnUpNVPJ20"
+  },
+  "videoOwnerChannelTitle": "Pekora Ch. 兎田ぺこら",
+  "videoOwnerChannelId": "UC1DCedRgGHBdm81E1llLhOQ"
+}
+Video details sample: {
+  "kind": "youtube#video",
+  "etag": "YlhVexQZiGgCJ0sb6D9JGyZoiHQ",
+  "id": "jCnUpNVPJ20",
+  "snippet": {
+    "publishedAt": "2026-06-26T09:00:18Z",
+    "channelId": "UC1DCedRgGHBdm81E1llLhOQ",
+    "title": "【超自然スクワッド】怪異の襲撃でパニック!? 予測不能なハプニングの連続でまさかの犠牲者が発生…！？ #shorts #hololive",
+    "description": "暗闇に潜む怪異に立ち向かいながら、仲間とお宝を探し出す！\nようやく出口を発見！？と思いきや、まさかの偽物の扉に捕まって大ピンチに！？\n命からがら脱出を試みるものの、次々と襲いかかるハプニングに大混乱……！\nみんなも『超自然スクワッド』で、一緒にお宝探しを楽しんでね～！\nゲームのダウンロードはこちら！→https://tbs.onelink.me/s6WV/yzf8gu2u\n#超自然スクワッド #PR\n\n⋈ －－－－－－－－－－－－－－－－－－－－－⋈\n\n※ホロライブプロダクションから未成年の視聴者の方々へのお願い\n[カバー 未成年者の方々へ]で検索してお読みいただくか、下記リンクをご確認の上、\nお楽しみください。\nhttps://hololivepro.com/request-to-minors/",
+    "thumbnails": {
+      "default": {
+        "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/default.jpg",
+        "width": 120,
+        "height": 90
+      },
+      "medium": {
+        "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/mqdefault.jpg",
+        "width": 320,
+        "height": 180
+      },
+      "high": {
+        "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/hqdefault.jpg",
+        "width": 480,
+        "height": 360
+      },
+      "standard": {
+        "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/sddefault.jpg",
+        "width": 640,
+        "height": 480
+      },
+      "maxres": {
+        "url": "https://i.ytimg.com/vi/jCnUpNVPJ20/maxresdefault.jpg",
+        "width": 1280,
+        "height": 720
+      }
+    },
+    "channelTitle": "Pekora Ch. 兎田ぺこら",
+    "tags": [
+      "兎田ぺこら",
+      "ホロライブ",
+      "歌ってみた",
+      "大神ミオ",
+      "Vtuber",
+      "ホロライブゲーマーズ",
+      "ゲーム実況",
+      "実況",
+      "VTuber",
+      "バーチャルYouTuber",
+      "VR",
+      "白 上フブキ",
+      "湊あくあ",
+      "赤井はあと",
+      "ときのそら",
+      "ロボ子さん",
+      "夜空 メル",
+      "大空スバル",
+      "夏色まつり",
+      "さくらみこ",
+      "百鬼あやめ",
+      "ア キ・ローゼンタール",
+      "戌神ころね",
+      "猫又おかゆ",
+      "紫咲シオン",
+      "潤羽るしあ",
+      "不知火フレア",
+      "白銀ノエル",
+      "宝鐘マリン",
+      "hololive",
+      "白上フブキ",
+      "夜空メル",
+      "アキ・ローゼンタール",
+      "ホロアニメ",
+      "3D",
+      "ホログラ",
+      "AZKi",
+      "星街すいせい",
+      "天音かなた",
+      "桐生ココ",
+      "姫森ルーナ",
+      "角巻わため",
+      "常闇トワ"
+    ],
+    "categoryId": "20",
+    "liveBroadcastContent": "none",
+    "defaultLanguage": "ja",
+    "localized": {
+      "title": "【超自然スクワッド】怪異の襲撃でパニック!? 予測不能なハプニングの連続でまさかの犠牲者が発生…！？ #shorts #hololive",
+      "description": "暗闇に潜む怪異に立ち向かいながら、仲間とお宝を探し出す！\nようやく出口を発見！？と思いきや、まさかの偽物の扉に捕まって大ピンチに！？\n命からがら脱出を試みるものの、次々と襲いかかるハプニングに大混乱……！\nみんなも『超自然スクワッド』で、一緒にお宝探しを楽しんでね～！\nゲームのダウンロードはこちら！→https://tbs.onelink.me/s6WV/yzf8gu2u\n#超自然スクワッド #PR\n\n⋈ －－－－－－－－－－－－－－－－－－－－－⋈\n\n※ホロライブプロダクションから未成年の視聴者の方々へのお願い\n[カバー 未成年者の方々へ]で検索してお読みいただくか、下記リンクをご確認の上、\nお楽しみください。\nhttps://hololivepro.com/request-to-minors/"
+    },
+    "defaultAudioLanguage": "ja"
+  },
+  "contentDetails": {
+    "duration": "PT55S",
+    "dimension": "2d",
+    "definition": "hd",
+    "caption": "false",
+    "licensedContent": true,
+    "contentRating": {},
+    "projection": "rectangular"
+  }
+}
+Got twitch token: Success
+--- TWITCH USER ---
+User sample: {
+  "id": "118858663",
+  "login": "tawffie",
+  "display_name": "Tawffie",
+  "type": "",
+  "broadcaster_type": "partner",
+  "description": "Horror and Souls-like Enthusiast and Dogtuber at your service! ",
+  "profile_image_url": "https://static-cdn.jtvnw.net/jtv_user_pictures/30e185a0-5e9f-4092-a889-c6287a6bbd15-profile_image-300x300.png",
+  "offline_image_url": "https://static-cdn.jtvnw.net/jtv_user_pictures/aa112451-9295-4780-9cf1-3868d035a30c-channel_offline_image-1920x1080.png",
+  "view_count": 0,
+  "created_at": "2016-03-16T04:01:04Z"
+}
+--- TWITCH VIDEOS ---
+Twitch Video sample: {
+  "id": "2805552779",
+  "stream_id": "318253762903",
+  "user_id": "118858663",
+  "user_login": "tawffie",
+  "user_name": "Tawffie",
+  "title": "Who lives who dies who tells my storyyy !throne !clip",
+  "description": "",
+  "created_at": "2026-06-26T03:05:21Z",
+  "published_at": "2026-06-26T03:05:21Z",
+  "url": "https://www.twitch.tv/videos/2805552779",
+  "thumbnail_url": "https://static-cdn.jtvnw.net/cf_vods/d2nvs31859zcd8/f1eee6ba0107db2df8cd_tawffie_318253762903_1782443117//thumb/thumb0-%{width}x%{height}.jpg",
+  "viewable": "public",
+  "view_count": 12,
+  "language": "en",
+  "type": "archive",
+  "duration": "4h44m10s",
+  "muted_segments": null
+}
+--- TWITCH CLIPS ---
+Twitch Clip sample: {
+  "id": "ArtsyAverageOstrichTriHard-NoHMtgwkPNsjiEUX",
+  "url": "https://www.twitch.tv/tawffie/clip/ArtsyAverageOstrichTriHard-NoHMtgwkPNsjiEUX",
+  "embed_url": "https://clips.twitch.tv/embed?clip=ArtsyAverageOstrichTriHard-NoHMtgwkPNsjiEUX",
+  "broadcaster_id": "118858663",
+  "broadcaster_name": "Tawffie",
+  "creator_id": "919373627",
+  "creator_name": "remchi2",
+  "video_id": "",
+  "game_id": "2085980140",
+  "language": "en",
+  "title": "dog barricade works \"great\"",
+  "view_count": 1510,
+  "created_at": "2023-12-23T07:41:28Z",
+  "thumbnail_url": "https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/973609a2-09aa-4fd7-aff4-209901e0d4d2/landscape/thumb/thumb-0000000000-480x272.jpg",
+  "duration": 43.9,
+  "vod_offset": null,
+  "is_featured": true
+}
+--- TWITCH LIVE STREAMS ---
+Twitch Live Stream sample: "No active stream"
