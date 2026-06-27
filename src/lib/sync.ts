@@ -182,7 +182,7 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
                 thumbnailUrl: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
                 sourceApi: 'holodex',
               },
-              { upsert: true, new: true }
+              { upsert: true, returnDocument: 'after' }
             );
           }
         } else {
@@ -238,7 +238,7 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
                 createdAt: new Date(clip.published_at || clip.available_at),
                 sourceApi: 'holodex',
               },
-              { upsert: true, new: true }
+              { upsert: true, returnDocument: 'after' }
             );
           }
         }
@@ -377,7 +377,7 @@ export async function syncFromYoutube(vtuberId?: string, force = false): Promise
                     thumbnailUrl: video.snippet?.thumbnails?.high?.url || video.snippet?.thumbnails?.default?.url || '',
                     sourceApi: 'youtube_api',
                   },
-                  { upsert: true, new: true }
+                  { upsert: true, returnDocument: 'after' }
                 );
               }
             } else {
@@ -493,7 +493,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
                 createdAt: new Date(clip.created_at),
                 sourceApi: 'twitch_api',
               },
-              { upsert: true, new: true }
+              { upsert: true, returnDocument: 'after' }
             );
           }
         } else {
@@ -542,7 +542,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
                 thumbnailUrl: liveStream.thumbnail_url.replace('{width}', '640').replace('{height}', '360'),
                 sourceApi: 'twitch_api',
               },
-              { upsert: true, new: true }
+              { upsert: true, returnDocument: 'after' }
             );
           }
         }
@@ -582,7 +582,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
                 thumbnailUrl: video.thumbnail_url.replace('%{width}', '640').replace('%{height}', '360'),
                 sourceApi: 'twitch_api',
               },
-              { upsert: true, new: true }
+              { upsert: true, returnDocument: 'after' }
             );
           }
         }
