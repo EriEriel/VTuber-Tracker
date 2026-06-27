@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { connectToDatabase } from './lib/db';
 import { VTuber, Stream, Clip, StatSnapshot } from './models';
 import { syncFromHolodex, syncFromTwitch } from './lib/sync';
@@ -5,6 +6,7 @@ import { syncFromHolodex, syncFromTwitch } from './lib/sync';
 async function testResolutionAndSync() {
   console.log('Connecting to database...');
   await connectToDatabase();
+  console.log('readyState before deleteMany:', mongoose.connection.readyState);
 
   // 1. Clear database to start fresh for test
   console.log('Clearing database collections...');

@@ -1,9 +1,6 @@
-import { connectToDatabase } from './db';
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
 import { getValidTwitchToken } from './twitch-token';
 
-// Connect to DB automatically when importing sync functions (optional, but safe)
-connectToDatabase();
 
 /**
  * Parses ISO 8601 duration format (e.g. PT55S, PT1H2M10S, PT2H40M) to seconds.
@@ -120,6 +117,8 @@ export async function fetchTwitchFollowerCount(broadcasterId: string): Promise<n
   }
 }
 
+// TODO: Handle the unhappy path of sync function
+
 /**
  * Sync VTubers configured with HoloDex source.
  * Enforces staleness checks.
@@ -186,6 +185,8 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
               { upsert: true, new: true }
             );
           }
+        } else {
+          throw new Error('Something else happenning')
         }
       }
 
@@ -379,6 +380,8 @@ export async function syncFromYoutube(vtuberId?: string, force = false): Promise
                   { upsert: true, new: true }
                 );
               }
+            } else {
+              throw new Error('Something else happen')
             }
           }
         }
@@ -493,6 +496,8 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
               { upsert: true, new: true }
             );
           }
+        } else {
+          throw new Error('Something else happen')
         }
       }
 
