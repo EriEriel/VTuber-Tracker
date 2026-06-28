@@ -1,6 +1,7 @@
 # deps
 node_modules/
 .env
-Agy Context/
+Claude Context/
 sync-investigation-checklists.md
 
+.aider*
