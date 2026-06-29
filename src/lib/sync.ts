@@ -1,39 +1,8 @@
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
 import { getValidTwitchToken } from './twitch-token';
-
-/**
- * Parses ISO 8601 duration format (e.g. PT55S, PT1H2M10S, PT2H40M) to seconds.
- */
-export function parseISO8601Duration(durationStr: string): number {
-  if (!durationStr) return 0;
-  const match = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return 0;
-  const hours = parseInt(match[1] || '0', 10);
-  const minutes = parseInt(match[2] || '0', 10);
-  const seconds = parseInt(match[3] || '0', 10);
-  return hours * 3600 + minutes * 60 + seconds;
-}
-
-/**
- * Parses Twitch duration format (e.g. 4h44m10s, 1h2m, 45m, 30s) to seconds.
- */
-export function parseTwitchDuration(durationStr: string): number {
-  if (!durationStr) return 0;
-  let seconds = 0;
-  const hoursMatch = durationStr.match(/(\d+)h/);
-  const minutesMatch = durationStr.match(/(\d+)m/);
-  const secondsMatch = durationStr.match(/(\d+)s/);
-
-  if (hoursMatch) seconds += parseInt(hoursMatch[1], 10) * 3600;
-  if (minutesMatch) seconds += parseInt(minutesMatch[1], 10) * 60;
-  if (secondsMatch) seconds += parseInt(secondsMatch[1], 10);
-
-  if (!hoursMatch && !minutesMatch && !secondsMatch) {
-    const num = parseInt(durationStr, 10);
-    if (!isNaN(num)) seconds = num;
-  }
-  return seconds;
-}
+import { mapHolodexStream, mapHolodexStatSnapshot, mapHolodexClip } from './mappers/holodex.mappers';
+import { mapYoutubeStream, mapYoutubeStatSnapshot } from './mappers/youtube.mapper';
+import { mapTwitchLiveStream, mapTwitchVod, mapTwitchStatSnapshot, mapTwitchClip } from './mappers/twitch.mapper';
 
 /**
  * Resolve a Twitch login name to user details from the Twitch API.
@@ -158,36 +127,14 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
             liveSyncSucceeded = true;
             const videos = await vRes.json() as any[];
             for (const video of videos) {
-              // Map Holodex video to Stream model
-              const startTime = new Date(video.available_at || video.published_at);
-              const duration = video.duration || 0;
-              const endTime = duration > 0 ? new Date(startTime.getTime() + duration * 1000) : null;
-
-              let status = 'unknown';
-              if (video.status === 'upcoming') status = 'upcoming';
-              else if (video.status === 'live') status = 'live';
-              else if (video.status === 'past') status = 'ended';
-
               try {
                 await Stream.findOneAndUpdate(
                   { platform: 'youtube', externalId: video.id },
-                  {
-                    vtuberId: vtuber._id,
-                    externalId: video.id,
-                    title: video.title,
-                    platform: 'youtube',
-                    startTime,
-                    endTime,
-                    duration,
-                    status,
-                    url: `https://www.youtube.com/watch?v=${video.id}`,
-                    thumbnailUrl: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
-                    sourceApi: 'holodex',
-                  },
+                  mapHolodexStream(video, vtuber._id.toString()),
                   { upsert: true, returnDocument: 'after' }
                 );
               } catch (err) {
-                console.error(`ID: ${video.externalId}, Data base error:`, err)
+                console.error(`ID: ${video.id}, Database error:`, err);
               }
             }
           }
@@ -214,16 +161,9 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
             if (channel.suborg) vtuber.suborg = channel.suborg;
 
             try {
-              // Record time-series snapshot
-              await StatSnapshot.create({
-                vtuberId: vtuber._id,
-                subscriberCount: parseInt(channel.subscriber_count || '0', 10),
-                viewCount: parseInt(channel.view_count || '0', 10),
-                capturedAt: new Date(),
-                sourceApi: 'holodex',
-              });
+              await StatSnapshot.create(mapHolodexStatSnapshot(channel, vtuber._id.toString()));
             } catch (err) {
-              console.error('Database Operation fialed:', err)
+              console.error('Database operation failed:', err);
             }
           }
         } catch (err) {
@@ -237,28 +177,14 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
           if (clRes.ok) {
             const clips = await clRes.json() as any[];
             for (const clip of clips) {
-              // Find parent stream if possible
-              let sourceStreamId = null;
-              // HoloDex clips don't explicitly link back to a single parent video ID in a standardized direct field in all listings,
-              // but we can default it to null and let it be.
-
               try {
                 await Clip.findOneAndUpdate(
                   { sourceApi: 'holodex', externalId: clip.id },
-                  {
-                    vtuberId: vtuber._id,
-                    sourceStreamId,
-                    externalId: clip.id,
-                    title: clip.title,
-                    url: `https://www.youtube.com/watch?v=${clip.id}`,
-                    viewCount: clip.view_count || 0,
-                    createdAt: new Date(clip.published_at || clip.available_at),
-                    sourceApi: 'holodex',
-                  },
+                  mapHolodexClip(clip, vtuber._id.toString()),
                   { upsert: true, returnDocument: 'after' }
                 );
               } catch (err) {
-                console.error('Database operation fialed:', err)
+                console.error('Database operation failed:', err);
               }
             }
           }
@@ -333,14 +259,7 @@ export async function syncFromYoutube(vtuberId?: string, force = false): Promise
                 vtuber.photo = channel.snippet.thumbnails.default.url;
               }
 
-              // Record snapshot
-              await StatSnapshot.create({
-                vtuberId: vtuber._id,
-                subscriberCount: parseInt(channel.statistics?.subscriberCount || '0', 10),
-                viewCount: parseInt(channel.statistics?.viewCount || '0', 10),
-                capturedAt: new Date(),
-                sourceApi: 'youtube_api',
-              });
+              await StatSnapshot.create(mapYoutubeStatSnapshot(channel, vtuber._id.toString()));
             }
           } else {
             console.error(`YouTube channel fetch non-OK for ${vtuber.name}: ${cRes.status}`);
@@ -375,42 +294,9 @@ export async function syncFromYoutube(vtuberId?: string, force = false): Promise
                 const videos = vData.items || [];
 
                 for (const video of videos) {
-                  const liveDetails = video.liveStreamingDetails;
-                  const contentDetails = video.contentDetails;
-
-                  const startTimeStr = liveDetails?.actualStartTime || liveDetails?.scheduledStartTime || video.snippet?.publishedAt;
-                  const startTime = startTimeStr ? new Date(startTimeStr) : new Date();
-
-                  const duration = contentDetails?.duration ? parseISO8601Duration(contentDetails.duration) : 0;
-
-                  let endTime = null;
-                  if (liveDetails?.actualEndTime) {
-                    endTime = new Date(liveDetails.actualEndTime);
-                  } else if (duration > 0 && !liveDetails) {
-                    // Standard video uploaded
-                    endTime = new Date(startTime.getTime() + duration * 1000);
-                  }
-
-                  let status = 'ended';
-                  const broadcastContent = video.snippet?.liveBroadcastContent;
-                  if (broadcastContent === 'live') status = 'live';
-                  else if (broadcastContent === 'upcoming') status = 'upcoming';
-
                   await Stream.findOneAndUpdate(
                     { platform: 'youtube', externalId: video.id },
-                    {
-                      vtuberId: vtuber._id,
-                      externalId: video.id,
-                      title: video.snippet?.title || 'Unknown Video',
-                      platform: 'youtube',
-                      startTime,
-                      endTime,
-                      duration,
-                      status,
-                      url: `https://www.youtube.com/watch?v=${video.id}`,
-                      thumbnailUrl: video.snippet?.thumbnails?.high?.url || video.snippet?.thumbnails?.default?.url || '',
-                      sourceApi: 'youtube_api',
-                    },
+                    mapYoutubeStream(video, vtuber._id.toString()),
                     { upsert: true, returnDocument: 'after' }
                   );
                 }
@@ -491,13 +377,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
             // Follower count as proxy for subscriberCount
             const followers = await fetchTwitchFollowerCount(vtuber.platformChannelId);
 
-            await StatSnapshot.create({
-              vtuberId: vtuber._id,
-              subscriberCount: followers,
-              viewCount: 0, // Twitch Helix users endpoint no longer provides aggregate views
-              capturedAt: new Date(),
-              sourceApi: 'twitch_api',
-            });
+            await StatSnapshot.create(mapTwitchStatSnapshot(followers, vtuber._id.toString()));
             statsSyncSucceeded = true;
           }
 
@@ -526,16 +406,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
 
               await Clip.findOneAndUpdate(
                 { sourceApi: 'twitch_api', externalId: clip.id },
-                {
-                  vtuberId: vtuber._id,
-                  sourceStreamId,
-                  externalId: clip.id,
-                  title: clip.title,
-                  url: clip.url,
-                  viewCount: clip.view_count || 0,
-                  createdAt: new Date(clip.created_at),
-                  sourceApi: 'twitch_api',
-                },
+                mapTwitchClip(clip, vtuber._id.toString(), sourceStreamId ? sourceStreamId.toString() : null),
                 { upsert: true, returnDocument: 'after' }
               );
             }
@@ -574,19 +445,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
             if (liveStream) {
               await Stream.findOneAndUpdate(
                 { platform: 'twitch', externalId: liveStream.id },
-                {
-                  vtuberId: vtuber._id,
-                  externalId: liveStream.id,
-                  title: liveStream.title,
-                  platform: 'twitch',
-                  startTime: new Date(liveStream.started_at),
-                  endTime: null,
-                  duration: null,
-                  status: 'live',
-                  url: `https://www.twitch.tv/${userLogin}`,
-                  thumbnailUrl: liveStream.thumbnail_url.replace('{width}', '640').replace('{height}', '360'),
-                  sourceApi: 'twitch_api',
-                },
+                mapTwitchLiveStream(liveStream, vtuber._id.toString(), userLogin),
                 { upsert: true, returnDocument: 'after' }
               );
             }
@@ -608,27 +467,9 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
             const videos = vData.data || [];
 
             for (const video of videos) {
-              // If this VOD is current live stream, ignore or map accordingly
-              // (Normally live stream and VOD have different IDs, Twitch generates VOD shortly after live starts)
-              const duration = parseTwitchDuration(video.duration);
-              const startTime = new Date(video.created_at);
-              const endTime = new Date(startTime.getTime() + duration * 1000);
-
               await Stream.findOneAndUpdate(
                 { platform: 'twitch', externalId: video.id },
-                {
-                  vtuberId: vtuber._id,
-                  externalId: video.id,
-                  title: video.title,
-                  platform: 'twitch',
-                  startTime,
-                  endTime,
-                  duration,
-                  status: 'ended',
-                  url: video.url,
-                  thumbnailUrl: video.thumbnail_url.replace('%{width}', '640').replace('%{height}', '360'),
-                  sourceApi: 'twitch_api',
-                },
+                mapTwitchVod(video, vtuber._id.toString()),
                 { upsert: true, returnDocument: 'after' }
               );
             }

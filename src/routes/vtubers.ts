@@ -38,7 +38,7 @@ vtubersRoute.post('/api/vtubers', async (c) => {
     let name = '';
     let englishName = '';
     let photo = '';
-    let source: 'holodex' | 'youtube_api' | 'twitch_api';
+    let source!: 'holodex' | 'youtube_api' | 'twitch_api';
     let platformChannelId = channelId;
     let org = undefined;
     let suborg = undefined;
