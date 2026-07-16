@@ -86,6 +86,50 @@ export async function fetchTwitchFollowerCount(broadcasterId: string): Promise<n
 }
 
 /**
+ * Extract a bare "@handle" from a YouTube channel URL or handle string.
+ * Returns null if the input doesn't look like a handle (e.g. already a channel ID).
+ */
+export function extractYoutubeHandle(input: string): string | null {
+  const urlMatch = input.match(/youtube\.com\/(@[\w.-]+)/i);
+  if (urlMatch) return urlMatch[1];
+  if (input.startsWith('@')) return input;
+  return null;
+}
+
+/**
+ * Resolve a YouTube @handle to full channel details via the YouTube Data API v3
+ * "forHandle" param -- a direct lookup, not search.list.
+ */
+export async function resolveYoutubeHandle(handle: string): Promise<{ id: string; name: string; englishName: string; photo: string } | null> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    throw new Error('YOUTUBE_API_KEY is not set in .env');
+  }
+
+  const url = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&forHandle=${encodeURIComponent(handle)}&key=${apiKey}`;
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`YouTube forHandle lookup failed: ${res.status} ${body}`);
+  }
+
+  const data = await res.json() as { items?: Array<{ id: string; snippet?: { title?: string; thumbnails?: { high?: { url: string }; default?: { url: string } } } }> };
+  const channel = data.items?.[0];
+  if (!channel) {
+    return null;
+  }
+
+  const name = channel.snippet?.title || '';
+  return {
+    id: channel.id,
+    name,
+    englishName: name,
+    photo: channel.snippet?.thumbnails?.high?.url || channel.snippet?.thumbnails?.default?.url || '',
+  };
+}
+
+/**
  * Sync VTubers configured with HoloDex source.
  * Enforces staleness checks.
  */
@@ -120,7 +164,7 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
 
       // 1. Sync Live Status (Streams)
       if (shouldSyncLive) {
-        const videosUrl = `https://holodex.net/api/v2/channels/${vtuber.platformChannelId}/videos?type=videos&limit=50`;
+        const videosUrl = `https://holodex.net/api/v2/channels/${vtuber.platformChannelId}/videos?type=stream&limit=50`;
         try {
           const vRes = await fetch(videosUrl, { headers: { 'X-APIKEY': apiKey } });
           if (vRes.ok) {

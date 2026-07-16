@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
-import { resolveTwitchUser } from '../lib/sync';
+import { resolveTwitchUser, extractYoutubeHandle, resolveYoutubeHandle } from '../lib/sync';
 
 export const vtubersRoute = new Hono();
 
@@ -44,13 +44,18 @@ vtubersRoute.post('/api/vtubers', async (c) => {
     let suborg = undefined;
 
     if (platform === 'youtube') {
+      // Normalize a pasted URL (https://www.youtube.com/@handle) down to the bare @handle.
+      // Both HoloDex and the YouTube fallback below need this same normalized form.
+      const handle = extractYoutubeHandle(channelId);
+      const lookupId = handle || channelId;
+
       // 1. Try HoloDex first
       const holodexKey = process.env.HOLODEX_API_KEY;
       let holodexSuccess = false;
 
       if (holodexKey) {
         try {
-          const holodexUrl = `https://holodex.net/api/v2/channels/${channelId}`;
+          const holodexUrl = `https://holodex.net/api/v2/channels/${lookupId}`;
           const res = await fetch(holodexUrl, {
             headers: { 'X-APIKEY': holodexKey }
           });
@@ -65,6 +70,7 @@ vtubersRoute.post('/api/vtubers', async (c) => {
               suborg = data.suborg;
               source = 'holodex';
               holodexSuccess = true;
+              platformChannelId = data.id; // canonical channel ID HoloDex resolved, not the raw input
             }
           }
         } catch (err) {
@@ -79,25 +85,38 @@ vtubersRoute.post('/api/vtubers', async (c) => {
           return c.json({ error: 'HoloDex lookup failed and YOUTUBE_API_KEY is not set' }, 500);
         }
 
-        const ytUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id=${channelId}&key=${youtubeKey}`;
-        const res = await fetch(ytUrl);
+        if (handle) {
+          // Not on HoloDex -- resolve the handle directly via YouTube's API instead of storing it as-is.
+          const resolved = await resolveYoutubeHandle(handle);
+          if (!resolved) {
+            return c.json({ error: `YouTube handle "${handle}" not found` }, 404);
+          }
+          name = resolved.name;
+          englishName = resolved.englishName;
+          photo = resolved.photo;
+          platformChannelId = resolved.id;
+          source = 'youtube_api';
+        } else {
+          const ytUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id=${channelId}&key=${youtubeKey}`;
+          const res = await fetch(ytUrl);
 
-        if (!res.ok) {
-          const errMsg = await res.text();
-          return c.json({ error: 'YouTube channel lookup failed', details: errMsg }, 502);
+          if (!res.ok) {
+            const errMsg = await res.text();
+            return c.json({ error: 'YouTube channel lookup failed', details: errMsg }, 502);
+          }
+
+          const data = await res.json() as any;
+          const channel = data.items?.[0];
+
+          if (!channel) {
+            return c.json({ error: `YouTube channel "${channelId}" not found` }, 404);
+          }
+
+          name = channel.snippet?.title || '';
+          englishName = name;
+          photo = channel.snippet?.thumbnails?.high?.url || channel.snippet?.thumbnails?.default?.url || '';
+          source = 'youtube_api';
         }
-
-        const data = await res.json() as any;
-        const channel = data.items?.[0];
-
-        if (!channel) {
-          return c.json({ error: `YouTube channel "${channelId}" not found` }, 404);
-        }
-
-        name = channel.snippet?.title || '';
-        englishName = name;
-        photo = channel.snippet?.thumbnails?.high?.url || channel.snippet?.thumbnails?.default?.url || '';
-        source = 'youtube_api';
       }
     } else {
       // platform === 'twitch'

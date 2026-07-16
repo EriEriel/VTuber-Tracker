@@ -4,6 +4,7 @@ import { youtubeTestRoute } from './routes/youtube.test';
 import { twitchTestRoute } from './routes/twitch.test';
 import { vtubersRoute } from './routes/vtubers';
 import { syncRoute } from './routes/sync';
+import { connectToDatabase } from './lib/db';
 
 const app = new Hono();
 
@@ -17,6 +18,8 @@ app.route('/', youtubeTestRoute);
 app.route('/', twitchTestRoute);
 
 export default app;
+
+await connectToDatabase();
 
 Bun.serve({
   port: 3000,

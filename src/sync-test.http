@@ -8,3 +8,24 @@ GET {{baseUrl}}/sync/test/youtube
 
 ### Twitch - resolve login to user_id, then fetch raw videos
 GET {{baseUrl}}/sync/test/twitch
+
+### Test get all
+GET {{baseUrl}}/api/vtubers
+
+### Test get by id: Pekora
+GET {{baseUrl}}/api/vtubers/6a3fa73271b0fd7edb4403e5
+
+### Test get by id: Tawffie
+GET {{baseUrl}}/api/vtubers/6a3fa73371b0fd7edb4403e6
+
+### POST create new vtuber: Koseki Bijou (youtube -> resolves to holodex source)
+POST {{baseUrl}}/api/vtubers
+Content-Type: application/json
+
+{
+  "platform": "youtube",
+  "channelId": "UC9p_lqQ0FEDz327Vgf5JwqA"
+}
+
+### Test get by id: Biboo 
+GET {{baseUrl}}/api/vtubers/6a589ee20fcf0047e4cee1e8
