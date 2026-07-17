@@ -7,6 +7,7 @@ use crate::routes::{
     jump_to,
     create_vtuber_channel,
     lookup_by_name,
+    delete_vtuber_channel,
 };
 
 #[derive(Parser)]
@@ -22,6 +23,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Open a VTuber's channel in your browser
+    #[command(alias = "j")]
     Jump {
         /// Name (or partial name) of the VTuber to jump to
         name: String,
@@ -35,9 +37,16 @@ enum Commands {
         /// URL of the VTuber channel to create
         url: String,
     },
+    /// Lookup VTubers by name
     #[command(alias = "lk")]
     Lookup {
         /// Name (or partial name) of the VTuber to look up
+        name: String,
+    },
+    /// Delete a VTuber channel by name
+    #[command(alias = "d")]
+    Delete {
+        /// Name (or partial name) of the VTuber to delete
         name: String,
     },
 }
@@ -47,7 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        // TODO: Jump to is not implement or test properly yet.
         Commands::Jump { name } => jump_to(&name).await?,
         Commands::List => {
             let vtubers = fetch_vtubers().await?;
@@ -69,6 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     v.english_name, v.name, v.platform_channel_id
                 );
             });
+        }
+        Commands::Delete { name } => {
+            delete_vtuber_channel(&name).await?;
         }
     }
 

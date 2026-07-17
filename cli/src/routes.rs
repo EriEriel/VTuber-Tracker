@@ -73,6 +73,30 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+pub async fn delete_vtuber_channel(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let vtubers = lookup_by_name(name).await?;
+    let v = vtubers
+        .first()
+        .ok_or_else(|| format!("No VTuber matching '{}' found", name))?;
+
+    let client = reqwest::Client::new();
+    let res = client
+        .delete(format!("http://localhost:3000/api/vtubers/{}", v.id))
+        .send()
+        .await?;
+
+    let status = res.status();
+    let body = res.text().await?;
+
+    if status.is_success() {
+        println!("Successfully deleted VTuber channel name: {} with ID {}", v.english_name, v.id);
+    } else {
+        println!("Failed to delete VTuber channel with ID {}. Status: {status}\n{body}", v.id);
+    }
+
+    Ok(())
+}
+
 pub async fn lookup_by_name(name: &str) -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let res = client
