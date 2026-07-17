@@ -55,6 +55,15 @@ Every sync afterward (`syncFromTwitch`) uses only the numeric ID for Twitch API 
 
 In both cases, `platformChannelId` is set from the **canonical channel ID returned by the API** (`data.id` / `resolved.id`), never the raw handle/URL string — so a handle or URL is only ever used to look the channel up once, the same way Twitch login names are.
 
+### Profile URL resolution
+
+`GET /api/vtubers/:id/profile-url` returns a browsable channel URL for a VTuber, computed differently per platform:
+
+- **YouTube** — built directly from the stored `platformChannelId`: `https://youtube.com/channel/{platformChannelId}`. No external call needed, since that ID is already canonical.
+- **Twitch** — the stored `platformChannelId` is only the numeric ID (see above), and Twitch channel pages only resolve by login name, never by ID. So this route calls `fetchTwitchUserById()` (`src/lib/sync.ts`) to resolve the numeric ID to its *current* login via Helix's `GET /helix/users?id=`, then builds `https://twitch.tv/{login}`. This is resolved fresh on every call rather than cached/stored, so it stays correct even after a Twitch username change.
+
+This route exists so CLI commands like `jump` never need platform-specific URL logic of their own — they just ask the backend for a URL and open it.
+
 ## CLI (`oshihub`)
 
 Rust CLI client for the backend. Requires the backend running locally on port 3000.
@@ -69,7 +78,7 @@ cargo run -- <command>
 
 - `list` (alias `l`) — list all tracked VTubers
 - `create <url>` (alias `c`) — register a new VTuber from a channel URL. Parses the platform (`youtube.com`/`youtu.be` → YouTube, `twitch.tv` → Twitch) and channel ID/handle out of the URL, then calls `POST /api/vtubers` on the backend.
-- `jump <name>` — look up a tracked VTuber by (partial, case-insensitive) name and open their channel in the browser. **Not fully implemented/tested yet** — it currently always builds a `youtube.com/channel/{platformChannelId}` URL, which is wrong for Twitch-sourced VTubers.
+- `jump <name>` — look up a tracked VTuber by (partial, case-insensitive) name via `GET /api/vtubers?name=`, resolve their channel URL via `GET /api/vtubers/:id/profile-url`, and open it in the browser. Works for both YouTube and Twitch-sourced VTubers.
 
 ### Stack
 
@@ -83,7 +92,7 @@ cargo run -- <command>
 
 - [x] Create: `POST /api/vtubers` via `create`
 - [x] Read: list all VTubers via `list`
-- [ ] Read: search by name/org/platform
+- [x] Read: search by name
 - [ ] Update
 - [ ] Delete
-- [ ] Fix `jump` for Twitch-sourced VTubers
+- [x] Fix `jump` for Twitch-sourced VTubers

@@ -1,9 +1,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
-import { resolveTwitchUser, extractYoutubeHandle, resolveYoutubeHandle } from '../lib/sync';
+import { resolveTwitchUser, extractYoutubeHandle, resolveYoutubeHandle, fetchTwitchUserById } from '../lib/sync';
 
 export const vtubersRoute = new Hono();
+
+// Escape regex metacharacters so user input to `$regex` filters is matched
+// literally, not compiled as a pattern (avoids ReDoS via crafted input).
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Schema for adding a new VTuber
 const CreateVTuberSchema = z.object({
@@ -174,10 +180,15 @@ vtubersRoute.get('/api/vtubers', async (c) => {
     const platform = c.req.query('platform');
     const org = c.req.query('org');
     const isTracked = c.req.query('isTracked');
+    const name = c.req.query('name');
 
     const filter: any = {};
     if (platform) filter.platform = platform;
     if (org) filter.org = org;
+    if (name) {
+      const pattern = { $regex: escapeRegex(name), $options: 'i' };
+      filter.$or = [{ name: pattern }, { englishName: pattern }];
+    }
     if (isTracked !== undefined) filter.isTracked = isTracked === 'true';
 
     const vtubers = await VTuber.find(filter).sort({ name: 1 });
@@ -213,6 +224,36 @@ vtubersRoute.get('/api/vtubers/:id', async (c) => {
     });
   } catch (error) {
     return c.json({ error: 'Failed to retrieve VTuber details', detail: String(error) }, 500);
+  }
+});
+
+/**
+ * GET /api/vtubers/:id/profile-url
+ * Resolve a browsable channel URL for this VTuber. YouTube's platformChannelId
+ * is already the canonical channel ID; Twitch's is a numeric ID that only
+ * Helix can translate back to the login name Twitch URLs require.
+ */
+vtubersRoute.get('/api/vtubers/:id/profile-url', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const vtuber = await VTuber.findById(id);
+
+    if (!vtuber) {
+      return c.json({ error: 'VTuber not found' }, 404);
+    }
+
+    if (vtuber.platform === 'youtube') {
+      return c.json({ url: `https://youtube.com/channel/${vtuber.platformChannelId}` });
+    }
+
+    const twitchUser = await fetchTwitchUserById(vtuber.platformChannelId);
+    if (!twitchUser) {
+      return c.json({ error: 'Could not resolve current Twitch login for this channel' }, 502);
+    }
+
+    return c.json({ url: `https://twitch.tv/${twitchUser.login}` });
+  } catch (error) {
+    return c.json({ error: 'Failed to resolve profile URL', detail: String(error) }, 500);
   }
 });
 

@@ -1,5 +1,5 @@
 use crate::models::{Platform, VtuberChannel};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new(); 
@@ -73,6 +73,60 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+pub async fn lookup_by_name(name: &str) -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("http://localhost:3000/api/vtubers")
+        .query(&[("name", name)])
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let vtubers: Vec<VtuberChannel> = serde_json::from_str(&res)?;
+    Ok(vtubers)
+}
+
+#[derive(Deserialize)]
+struct ProfileUrlResponse {
+    url: String,
+}
+
+async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("http://localhost:3000/api/vtubers/{id}/profile-url"))
+        .send()
+        .await?;
+
+    let status = res.status();
+    let body = res.text().await?;
+
+    if !status.is_success() {
+        return Err(format!("backend returned {status}: {body}").into());
+    }
+
+    let parsed: ProfileUrlResponse = serde_json::from_str(&body)?;
+    Ok(parsed.url)
+}
+
+pub async fn jump_to(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let vtubers = lookup_by_name(name).await?;
+
+    match vtubers.first() {
+        Some(v) => match fetch_profile_url(&v.id).await {
+            Ok(url) => {
+                println!("Jumping to {} ({})", v.english_name, url);
+                open::that(url)?;
+            }
+            Err(err) => println!("Could not resolve a channel URL for {}: {}", v.english_name, err),
+        },
+        None => println!("No VTuber matching '{}' found", name),
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,27 +158,4 @@ mod tests {
     fn rejects_unsupported_platform() {
         assert!(parse_channel_url("https://example.com/foo").is_err());
     }
-}
-
-pub async fn jump_to(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let vtubers = fetch_vtubers().await?;
-    let query = name.to_lowercase();
-
-    let found = vtubers
-        .iter()
-        .find(|v| {
-        v.english_name.to_lowercase().contains(&query)
-            || v.name.to_lowercase().contains(&query)
-    });
-
-    match found {
-        Some(v) => {
-            let url = format!("https://youtube.com/channel/{}", v.platform_channel_id);
-            println!("Jumping to {} ({})", v.english_name, url);
-            open::that(url)?;
-        }
-        None => println!("No VTuber matching '{}' found", name),
-    }
-
-    Ok(())
 }

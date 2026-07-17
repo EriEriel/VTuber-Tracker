@@ -2,7 +2,12 @@ mod models;
 mod routes;
 
 use clap::{Parser, Subcommand};
-use crate::routes::{fetch_vtubers, jump_to, create_vtuber_channel};
+use crate::routes::{
+    fetch_vtubers,
+    jump_to,
+    create_vtuber_channel,
+    lookup_by_name,
+};
 
 #[derive(Parser)]
 #[command(
@@ -29,7 +34,12 @@ enum Commands {
     Create {
         /// URL of the VTuber channel to create
         url: String,
-    }
+    },
+    #[command(alias = "lk")]
+    Lookup {
+        /// Name (or partial name) of the VTuber to look up
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -50,6 +60,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Create { url } => {
             create_vtuber_channel(&url).await?;
+        }
+        Commands::Lookup { name } => {
+            let vtubers = lookup_by_name(&name).await?;
+            vtubers.iter().for_each(|v| {
+                println!(
+                    "{} ({}) - {}",
+                    v.english_name, v.name, v.platform_channel_id
+                );
+            });
         }
     }
 
