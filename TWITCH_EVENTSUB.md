@@ -222,12 +222,22 @@ Sources:
    live `status: 'enabled'` subscription bound to the current session, and dead
    `websocket_disconnected` subscriptions from earlier test connections get
    cleaned up correctly.
-6. [ ] **Not yet verified**: an actual `stream.online` notification arriving and
-   triggering `syncFromTwitch()` end-to-end. This needs either a real Twitch
-   channel going live, or the
-   [Twitch CLI's event simulation](https://dev.twitch.tv/docs/cli/websocket-event-command)
-   (not installed/used during this pass) to fire a synthetic event at the running
-   connection.
+6. [x] Verified end-to-end using the
+   [Twitch CLI's event simulator](https://dev.twitch.tv/docs/cli/websocket-event-command):
+   `twitch event websocket start-server` (mock EventSub server on
+   `127.0.0.1:8080`, which also serves a mock `/eventsub/subscriptions`
+   endpoint), temporarily pointed `connect()`'s URL and `helixFetch()`'s base
+   URL at it, restarted, then `twitch event trigger stream.online
+   --transport=websocket --session=<id> --to-user=118858663`. Tawffie's
+   `lastLiveSyncedAt`/`lastStatsSyncedAt`/`lastSyncedAt` all updated within the
+   same second as the trigger, confirming `handleNotification()` correctly
+   matched the broadcaster and called the real `syncFromTwitch()` (which still
+   hit the real Twitch API for the actual stream data — only the EventSub
+   plumbing itself was mocked). All temporary URL overrides were reverted
+   immediately after; the real connection was re-verified afterward and shows
+   the same single `enabled` subscription bound to a real session.
 7. [ ] **Not yet verified**: the `session_reconnect` handoff path — never
    naturally triggered during testing, since Twitch only sends it occasionally
-   from its own side.
+   from its own side. (The CLI simulator has a `twitch event websocket
+   reconnect` command that could exercise this the same way, if it becomes
+   worth testing deliberately.)
