@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
 import { resolveTwitchUser, extractYoutubeHandle, resolveYoutubeHandle, fetchTwitchUserById } from '../lib/sync';
+import { subscribeToLive, unsubscribeFromLive } from '../lib/twitch-eventsub';
 
 export const vtubersRoute = new Hono();
 
@@ -165,6 +166,14 @@ vtubersRoute.post('/api/vtubers', async (c) => {
       lastStatsSyncedAt: null,
     });
 
+    if (platform === 'twitch') {
+      // Fire-and-forget: a subscribe hiccup shouldn't fail registration,
+      // and the next EventSub reconnect's reconcile will catch it anyway.
+      subscribeToLive(platformChannelId).catch((err) =>
+        console.error(`Failed to subscribe to EventSub for ${platformChannelId}:`, err)
+      );
+    }
+
     return c.json({ message: 'VTuber registered successfully', vtuber }, 201);
   } catch (error) {
     return c.json({ error: 'Failed to create VTuber', detail: String(error) }, 500);
@@ -309,6 +318,12 @@ vtubersRoute.delete('/api/vtubers/:id', async (c) => {
     await Stream.deleteMany({ vtuberId: id });
     await Clip.deleteMany({ vtuberId: id });
     await StatSnapshot.deleteMany({ vtuberId: id });
+
+    if (deleted.platform === 'twitch') {
+      await unsubscribeFromLive(deleted.platformChannelId).catch((err) =>
+        console.error(`Failed to remove EventSub subscription for ${deleted.platformChannelId}:`, err)
+      );
+    }
 
     return c.json({ message: 'VTuber and all associated data deleted successfully', vtuber: deleted });
   } catch (error) {
