@@ -8,6 +8,7 @@ use crate::routes::{
     create_vtuber_channel,
     lookup_by_name,
     delete_vtuber_channel,
+    sync_vtuber_channels,
 };
 
 #[derive(Parser)]
@@ -49,6 +50,11 @@ enum Commands {
         /// Name (or partial name) of the VTuber to delete
         name: String,
     },
+    /// Sync VTuber channels with the database
+    #[command(alias = "s")]
+    Sync {
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -69,6 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Create { url } => {
             create_vtuber_channel(&url).await?;
         }
+        //TODO: Show Stream, live status(Not properly implement yet), and clip if possible. deafault show 10 of each along
+        //side with title and thumnail(With kitty graphic protocal), allow flag to show in <= 10 of each
         Commands::Lookup { name } => {
             let vtubers = lookup_by_name(&name).await?;
             vtubers.iter().for_each(|v| {
@@ -80,6 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Delete { name } => {
             delete_vtuber_channel(&name).await?;
+        },
+        Commands::Sync { name } => {
+            sync_vtuber_channels(Some(&name)).await?;
         }
     }
 

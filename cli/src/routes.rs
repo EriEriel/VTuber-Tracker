@@ -1,4 +1,6 @@
-use crate::models::{Platform, VtuberChannel};
+use std::option::Option;
+
+use crate::models::{Platform, VtuberChannel,Source};
 use serde::{Deserialize, Serialize};
 
 pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
@@ -13,6 +15,7 @@ pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, Box<dyn std::error::E
     let vtubers: Vec<VtuberChannel> = serde_json::from_str(&res)?;
     Ok(vtubers)
 }
+
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +149,58 @@ pub async fn jump_to(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => println!("Could not resolve a channel URL for {}: {}", v.english_name, err),
         },
         None => println!("No VTuber matching '{}' found", name),
+    }
+
+    Ok(())
+}
+
+pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    match name {
+        Some(name) => {
+            let vtubers = lookup_by_name(name).await?;
+            match vtubers.first() {
+                Some(v) => {
+                    let sync_path = match v.source {
+                        Source::Holodex => "holodex",
+                        Source::Youtube_api => "youtube",
+                        Source::Twitch_api => "twitch",
+                    };
+
+                    let client = reqwest::Client::new();
+                    let res = client
+                        .post(format!("http://localhost:3000/api/sync/{sync_path}?id={}&force=true", v.id))
+                        .send()
+                        .await?;
+
+                    let status = res.status();
+                    let body = res.text().await?;
+
+                    if status.is_success() {
+                        println!("Successfully synced VTuber channel: {}", v.english_name);
+                    } else {
+                        println!("Failed to sync VTuber channel: {}. Status: {status}\n{body}", v.english_name);
+                    }
+                }
+                None => println!("VTuber channel {} is not founded in database.", name),
+            }
+        }
+        None => {
+                let client = reqwest::Client::new();
+                let res = client
+                    .post("http://localhost:3000/api/sync/all")
+                    .body("force=true")
+                    .send()
+                    .await?;
+
+                let status = res.status();
+                let body = res.text().await?;
+
+                if status.is_success() {
+                    println!("Successfully synced all VTuber channels");
+                } else {
+                    println!("Failed to sync VTuber channels. Status: {status}\n{body}");
+                }
+        }
     }
 
     Ok(())
