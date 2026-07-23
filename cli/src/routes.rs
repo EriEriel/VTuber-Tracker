@@ -119,6 +119,44 @@ struct ProfileUrlResponse {
     url: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamInfo {
+    pub title: String,
+    pub status: String,
+    pub url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipInfo {
+    pub title: String,
+    pub url: String,
+    pub view_count: u64,
+}
+
+#[derive(Deserialize)]
+pub struct VtuberDetail {
+    pub streams: Vec<StreamInfo>,
+    pub clips: Vec<ClipInfo>,
+}
+
+// GET /api/vtubers/:id also returns `vtuber` and `snapshots`, but Lookup
+// only needs streams/clips for now — serde ignores fields a struct doesn't
+// declare, so there's no need to model the rest.
+pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("http://localhost:3000/api/vtubers/{id}"))
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let detail: VtuberDetail = serde_json::from_str(&res)?;
+    Ok(detail)
+}
+
 async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let res = client

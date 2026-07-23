@@ -4,6 +4,7 @@ mod routes;
 use clap::{Parser, Subcommand};
 use crate::routes::{
     fetch_vtubers,
+    fetch_vtuber_detail,
     jump_to,
     create_vtuber_channel,
     lookup_by_name,
@@ -43,6 +44,9 @@ enum Commands {
     Lookup {
         /// Name (or partial name) of the VTuber to look up
         name: String,
+        /// Max number of streams/clips to show per VTuber (capped at 10)
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
     },
     /// Delete a VTuber channel by name
     #[command(alias = "d")]
@@ -75,16 +79,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Create { url } => {
             create_vtuber_channel(&url).await?;
         }
-        //TODO: Show Stream, live status(Not properly implement yet), and clip if possible. deafault show 10 of each along
-        //side with title and thumnail(With kitty graphic protocal), allow flag to show in <= 10 of each
-        Commands::Lookup { name } => {
+        Commands::Lookup { name, limit } => {
             let vtubers = lookup_by_name(&name).await?;
-            vtubers.iter().for_each(|v| {
+            if vtubers.is_empty() {
+                println!("No VTuber matching '{}' found", name);
+            }
+
+            let limit = limit.min(10);
+
+            for v in &vtubers {
                 println!(
                     "{} ({}) - {}",
                     v.english_name, v.name, v.platform_channel_id
                 );
-            });
+
+                let detail = fetch_vtuber_detail(&v.id).await?;
+                let is_live = detail.streams.iter().any(|s| s.status == "live");
+                println!("  Status: {}", if is_live { "LIVE" } else { "offline" });
+
+                println!("  Recent streams:");
+                if detail.streams.is_empty() {
+                    println!("    (none)");
+                } else {
+                    for s in detail.streams.iter().take(limit) {
+                        println!("    [{}] {} - {}", s.status, s.title, s.url);
+                    }
+                }
+
+                println!("  Recent clips:");
+                if detail.clips.is_empty() {
+                    println!("    (none)");
+                } else {
+                    for c in detail.clips.iter().take(limit) {
+                        println!("    {} ({} views) - {}", c.title, c.view_count, c.url);
+                    }
+                }
+
+                println!();
+            }
         }
         Commands::Delete { name } => {
             delete_vtuber_channel(&name).await?;
