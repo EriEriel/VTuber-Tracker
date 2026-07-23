@@ -10,6 +10,7 @@ use crate::routes::{
     lookup_by_name,
     delete_vtuber_channel,
     sync_vtuber_channels,
+    print_thumbnail,
 };
 
 #[derive(Parser)]
@@ -92,6 +93,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{} ({}) - {}",
                     v.english_name, v.name, v.platform_channel_id
                 );
+
+                if let Err(err) = print_thumbnail(&v.photo).await {
+                    eprintln!("  (could not render thumbnail: {err})");
+                }
 
                 let detail = fetch_vtuber_detail(&v.id).await?;
                 let is_live = detail.streams.iter().any(|s| s.status == "live");

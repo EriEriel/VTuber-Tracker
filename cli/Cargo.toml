@@ -10,3 +10,5 @@ serde_json = "1.0.150"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["full"] }
 open = "5"
+viuer = "0.9"
+image = "0.25"

@@ -157,6 +157,31 @@ pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, Box<dyn std::
     Ok(detail)
 }
 
+// Fetches raw image bytes and renders them inline via viuer, which probes
+// the terminal's actual capability (kitty protocol, iTerm's own protocol,
+// Sixel, or a block-character fallback) rather than assuming kitty support.
+// Decoding the bytes into a DynamicImage happens here because viuer's API
+// takes an already-decoded image, not raw bytes — it only owns the
+// terminal-output half, not fetching or decoding.
+pub async fn print_thumbnail(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let bytes = client.get(url).send().await?.bytes().await?;
+    let img = image::load_from_memory(&bytes)?;
+
+    let conf = viuer::Config {
+        width: Some(12),
+        // viuer defaults to `absolute_offset: true`, which positions the
+        // image at (x, y) relative to the terminal's top-left corner —
+        // not the cursor. Without this, the image renders pinned to the
+        // very top of the pane regardless of where Lookup's output
+        // actually is, overlapping whatever's already there.
+        absolute_offset: false,
+        ..Default::default()
+    };
+    viuer::print(&img, &conf)?;
+    Ok(())
+}
+
 async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let res = client
