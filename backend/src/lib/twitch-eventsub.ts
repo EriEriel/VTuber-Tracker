@@ -1,15 +1,21 @@
-// Real-time "went live" notifications for Twitch-sourced VTubers via
-// EventSub over WebSocket. See TWITCH_EVENTSUB.md at the repo root for the
-// full design rationale (why websocket over webhook, limits, etc).
+// Real-time "went live"/"went offline" notifications for Twitch-sourced
+// VTubers via EventSub over WebSocket. See TWITCH_EVENTSUB.md at the repo
+// root for the full design rationale (why websocket over webhook, limits,
+// etc).
 //
 // EventSub is only the trigger: on `stream.online` we don't try to build a
 // Stream document from the event payload (it's intentionally minimal — no
 // title, no thumbnail) — we call the existing syncFromTwitch() so the
-// already-tested Helix -> Mongo pipeline does the real work.
+// already-tested Helix -> Mongo pipeline does the real work. `stream.offline`
+// carries even less (no timestamp at all), so it's handled directly here:
+// flip the matching live Stream doc to ended and stamp endTime ourselves.
 
-import { VTuber } from '../models';
+import { VTuber, Stream } from '../models';
 import { getValidUserToken } from './twitch-user-token';
 import { syncFromTwitch } from './sync';
+
+const EVENT_TYPES = ['stream.online', 'stream.offline'] as const;
+type EventType = (typeof EVENT_TYPES)[number];
 
 function requireClientId(): string {
   const id = process.env.TWITCH_CLIENT_ID;
@@ -57,12 +63,12 @@ async function helixFetch(path: string, init: RequestInit = {}): Promise<Respons
   });
 }
 
-async function createSubscription(broadcasterId: string, sessionId: string): Promise<void> {
+async function createSubscription(broadcasterId: string, sessionId: string, type: EventType): Promise<void> {
   const res = await helixFetch('/eventsub/subscriptions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'stream.online',
+      type,
       version: '1',
       condition: { broadcaster_user_id: broadcasterId },
       transport: { method: 'websocket', session_id: sessionId },
@@ -72,18 +78,22 @@ async function createSubscription(broadcasterId: string, sessionId: string): Pro
   // 409 = a subscription for this broadcaster/type/transport already
   // exists (e.g. reconcile ran twice) — not an error, just a no-op.
   if (!res.ok && res.status !== 409) {
-    console.error(`Failed to subscribe to stream.online for ${broadcasterId}: ${res.status} ${await res.text()}`);
+    console.error(`Failed to subscribe to ${type} for ${broadcasterId}: ${res.status} ${await res.text()}`);
   }
 }
 
 interface HelixSubscription {
   id: string;
   status: string;
+  type: string;
   condition: { broadcaster_user_id?: string };
 }
 
+// No `type` filter: this app only ever creates stream.online/stream.offline
+// subscriptions, and the list endpoint is already scoped to this app's
+// Client-Id, so one call covers both.
 async function listSubscriptions(): Promise<HelixSubscription[]> {
-  const res = await helixFetch('/eventsub/subscriptions?type=stream.online');
+  const res = await helixFetch('/eventsub/subscriptions');
   if (!res.ok) {
     console.error(`Failed to list EventSub subscriptions: ${res.status} ${await res.text()}`);
     return [];
@@ -128,28 +138,47 @@ async function reconcileSubscriptions(sessionId: string): Promise<void> {
       .map((sub) => deleteSubscription(sub.id))
   );
 
-  const liveSubscribedIds = new Set(
-    existingSubs.filter((sub) => sub.status === 'enabled').map((sub) => sub.condition.broadcaster_user_id)
+  // Coverage is per (broadcaster, event type) — a VTuber can have
+  // stream.online covered but not stream.offline (or vice versa).
+  const covered = new Set(
+    existingSubs
+      .filter((sub) => sub.status === 'enabled')
+      .map((sub) => `${sub.condition.broadcaster_user_id}:${sub.type}`)
   );
 
-  await Promise.all(
-    trackedVtubers
-      .filter((v) => !liveSubscribedIds.has(v.platformChannelId))
-      .map((v) => createSubscription(v.platformChannelId, sessionId))
-  );
+  const toCreate: Promise<void>[] = [];
+  for (const v of trackedVtubers) {
+    for (const type of EVENT_TYPES) {
+      if (!covered.has(`${v.platformChannelId}:${type}`)) {
+        toCreate.push(createSubscription(v.platformChannelId, sessionId, type));
+      }
+    }
+  }
+  await Promise.all(toCreate);
 }
 
 async function handleNotification(payload: any): Promise<void> {
-  if (payload.subscription?.type !== 'stream.online') return;
-
+  const type = payload.subscription?.type;
   const broadcasterId = payload.event?.broadcaster_user_id;
   if (!broadcasterId) return;
 
   const vtuber = await VTuber.findOne({ platform: 'twitch', platformChannelId: broadcasterId });
   if (!vtuber) return;
 
-  console.log(`${vtuber.name} just went live on Twitch — syncing`);
-  await syncFromTwitch(vtuber._id.toString(), true);
+  if (type === 'stream.online') {
+    console.log(`${vtuber.name} just went live on Twitch — syncing`);
+    await syncFromTwitch(vtuber._id.toString(), true);
+  } else if (type === 'stream.offline') {
+    // stream.offline carries no timestamp, so endTime is stamped on arrival
+    // rather than derived from the event payload.
+    const ended = await Stream.findOneAndUpdate(
+      { vtuberId: vtuber._id, status: 'live' },
+      { status: 'ended', endTime: new Date() }
+    );
+    if (ended) {
+      console.log(`${vtuber.name} went offline on Twitch — marked stream ended`);
+    }
+  }
 }
 
 function connect(url = 'wss://eventsub.wss.twitch.tv/ws'): void {
@@ -224,13 +253,11 @@ export async function subscribeToLive(broadcasterId: string): Promise<void> {
     console.warn(`EventSub session not ready yet — ${broadcasterId} will be picked up on next reconcile`);
     return;
   }
-  await createSubscription(broadcasterId, state.sessionId);
+  await Promise.all(EVENT_TYPES.map((type) => createSubscription(broadcasterId, state.sessionId!, type)));
 }
 
 export async function unsubscribeFromLive(broadcasterId: string): Promise<void> {
   const existing = await listSubscriptions();
-  const match = existing.find((sub) => sub.condition.broadcaster_user_id === broadcasterId);
-  if (match) {
-    await deleteSubscription(match.id);
-  }
+  const matches = existing.filter((sub) => sub.condition.broadcaster_user_id === broadcasterId);
+  await Promise.all(matches.map((sub) => deleteSubscription(sub.id)));
 }

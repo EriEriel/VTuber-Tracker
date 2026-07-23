@@ -1,8 +1,9 @@
 # Twitch EventSub Integration — Plan
 
-Status: **implemented.** This document captures the approach for adding real-time
-"went live" notifications for Twitch-sourced VTubers, so the project doesn't have
-to poll Twitch on a timer once a scheduler eventually exists. Sections below are
+Status: **implemented**, including `stream.offline`. This document captures the
+approach for adding real-time "went live"/"went offline" notifications for
+Twitch-sourced VTubers, so the project doesn't have to poll Twitch on a timer
+once a scheduler eventually exists. Sections below are
 updated in place where implementation diverged from the original plan (auth
 requirements, the reconcile logic, hot-reload behavior) — look for the
 "corrected"/"gotcha found" callouts. See the task list at the bottom for exactly
@@ -78,6 +79,12 @@ New module: `backend/src/lib/twitch-eventsub.ts`, sibling to `twitch-token.ts` a
   (`id`, `broadcaster_user_id/login/name`, `type`, `started_at` — no title, no
   thumbnail, no game), so a real Helix call is required anyway to get displayable
   data.
+- On `stream.offline`, handle it directly instead of calling `syncFromTwitch` —
+  the event carries even less than `stream.online` (just the broadcaster's
+  identity, no timestamp at all), so there's nothing worth a real Helix round
+  trip for. Find the VTuber's `live` `Stream` doc and flip it to `status: 'ended'`,
+  stamping `endTime` with the notification's arrival time rather than anything
+  from the payload.
 
 ### Startup flow (`index.ts`)
 
@@ -94,12 +101,15 @@ Bun.serve({ ... })
 2. On `session_welcome`, capture `payload.session.id`.
 3. Within the 10-second subscribe deadline (see Limits), query
    `VTuber.find({ platform: 'twitch', isTracked: true })` and, for each,
-   `POST https://api.twitch.tv/helix/eventsub/subscriptions` with
-   `type: 'stream.online'`, `condition: { broadcaster_user_id: platformChannelId }`,
+   `POST https://api.twitch.tv/helix/eventsub/subscriptions` **twice** — once
+   for `type: 'stream.online'`, once for `type: 'stream.offline'` — both with
+   `condition: { broadcaster_user_id: platformChannelId }`,
    `transport: { method: 'websocket', session_id }`.
-4. On `notification` where `subscription.type === 'stream.online'`: look up the
-   VTuber by `platformChannelId === event.broadcaster_user_id`, call
-   `syncFromTwitch(vtuber._id, true)`.
+4. On `notification`, branch on `subscription.type`: `stream.online` looks up
+   the VTuber by `platformChannelId === event.broadcaster_user_id` and calls
+   `syncFromTwitch(vtuber._id, true)`; `stream.offline` looks up the same way
+   and instead directly updates the matching `live` `Stream` doc to
+   `status: 'ended'` + `endTime: new Date()`.
 5. On `session_keepalive`: no-op (just proof the connection is alive).
 6. On `session_reconnect`: open a new connection to `payload.session.reconnect_url`,
    swap once its `session_welcome` arrives, close the old socket. Twitch retains all
@@ -116,6 +126,14 @@ against the current `isTracked` Twitch VTuber list:
 - Subscriptions that exist for a VTuber no longer tracked (or deleted) → delete via
   `DELETE /helix/eventsub/subscriptions?id=`.
 - Tracked VTubers with no existing subscription → create.
+
+Since both `stream.online` and `stream.offline` are now tracked, coverage is
+keyed on the pair `` `${broadcasterId}:${type}` ``, not just the broadcaster —
+a VTuber can have one event type covered and be missing the other. This is
+what makes the `stream.offline` rollout self-healing: every already-tracked
+VTuber has `stream.online` coverage but no `stream.offline` subscription yet,
+and reconcile's per-pair diff should create just the missing half on the next
+`session_welcome` — not yet confirmed by an actual restart (see task list).
 
 **Gotcha found during implementation, not anticipated by this plan:** a
 subscription's `status` field matters, not just whether one exists for a given
@@ -159,18 +177,28 @@ trustworthy way to test changes to it — hot reload is still fine for changes m
 
 - `POST /api/vtubers` (platform `twitch`, after successful registration) →
   `subscribeToLive(platformChannelId)`, so a newly-added streamer doesn't wait for
-  a backend restart to get live coverage.
+  a backend restart to get live coverage. Creates both `stream.online` and
+  `stream.offline` subscriptions.
 - `DELETE /api/vtubers/:id` (platform `twitch`) → `unsubscribeFromLive(...)` in the
   existing cascade-delete block, alongside the `Stream`/`Clip`/`StatSnapshot`
-  cleanup that's already there.
+  cleanup that's already there. Deletes both subscriptions for that broadcaster.
 
 ## Data model
 
 `syncFromTwitch()` already writes into the existing `Stream` model
 (`status: 'live'`, unique on `{platform, externalId}` — `Stream.ts:50`), which is
 exactly the shape a "went live" event should produce — no changes needed there.
-`stream.offline` (optional, phase 2) would find the matching `live` Stream doc for
-that VTuber and flip it to `status: 'ended'` with an `endTime`.
+
+`stream.offline`'s handler queries the same model directly:
+`Stream.findOneAndUpdate({ vtuberId, status: 'live' }, { status: 'ended', endTime:
+new Date() })`. No schema changes needed here either — the `{vtuberId, status}`
+compound index already on `Stream` (`Stream.ts:52`) exists for filtering by
+status and covers this query for free. Looking up by `{vtuberId, status: 'live'}`
+rather than by `externalId` is deliberate: the `stream.offline` event doesn't
+include `externalId` (or any stream identifier) at all, only the broadcaster —
+so "the current live stream for this VTuber" is the only handle available. The
+update is naturally idempotent: if the event ever arrived twice, the second
+call would just match zero documents.
 
 One new collection *was* needed that the original plan didn't scope: `TwitchAuth`
 (`backend/src/models/TwitchAuth.ts`), a singleton document holding the user
@@ -196,13 +224,10 @@ Sources:
   design (likely polling HoloDex's aggregated live status, not YouTube directly —
   see prior discussion). Not part of this document.
 - **Actual notification delivery beyond the database** (Discord webhook, desktop
-  push, etc.) — out of scope for the first pass. The `stream.online` handler is a
-  natural place to add a Discord webhook `fetch()` call later, once there's
-  somewhere the user actually wants to be pinged; adding it speculatively now
-  would be building for a requirement that doesn't exist yet.
-- **`stream.offline` handling** — straightforward given the design above, but not
-  required for "notify me when someone goes live," so deferred to keep the first
-  pass small.
+  push, etc.) — out of scope for the first pass. The `stream.online`/`stream.offline`
+  handlers are a natural place to add a Discord webhook `fetch()` call later, once
+  there's somewhere the user actually wants to be pinged; adding it speculatively
+  now would be building for a requirement that doesn't exist yet.
 
 ## Task list — status
 
@@ -241,3 +266,17 @@ Sources:
    from its own side. (The CLI simulator has a `twitch event websocket
    reconnect` command that could exercise this the same way, if it becomes
    worth testing deliberately.)
+8. [x] Implemented `stream.offline` handling: `createSubscription`,
+   `listSubscriptions`, `reconcileSubscriptions`, `subscribeToLive`, and
+   `unsubscribeFromLive` all generalized from "the one `stream.online`
+   subscription per broadcaster" to "one subscription per `(broadcaster,
+   EventType)` pair"; `handleNotification` branches on `subscription.type` and
+   writes `status: 'ended'` + `endTime: new Date()` directly instead of calling
+   `syncFromTwitch`. **Not yet live-tested** — same caveat as item 7 on hot
+   reload: this file was edited while the backend may have been running, so a
+   real restart plus `twitch event trigger stream.offline
+   --transport=websocket --session=<id> --to-user=<id>` (mirroring the
+   `stream.online` verification in item 6) is the way to confirm the whole
+   path end-to-end, including that reconcile actually backfills the missing
+   `stream.offline` subscription for every VTuber that only had `stream.online`
+   coverage from before this change.

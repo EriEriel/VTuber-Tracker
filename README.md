@@ -94,5 +94,5 @@ cargo run -- <command>
 - [x] Read: list all VTubers via `list`
 - [x] Read: search by name
 - [ ] Update
-- [ ] Delete
+- [x] Delete
 - [x] Fix `jump` for Twitch-sourced VTubers
