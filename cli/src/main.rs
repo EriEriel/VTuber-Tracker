@@ -2,6 +2,9 @@ mod models;
 mod routes;
 
 use clap::{Parser, Subcommand};
+use crossterm::execute;
+use crossterm::cursor::{MoveRight, MoveDown, MoveToColumn};
+use std::io::stdout;
 use crate::routes::{
     fetch_vtubers,
     fetch_vtuber_detail,
@@ -11,6 +14,7 @@ use crate::routes::{
     delete_vtuber_channel,
     sync_vtuber_channels,
     print_thumbnail,
+    print_stream_thumbnail,
 };
 
 #[derive(Parser)]
@@ -107,7 +111,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("    (none)");
                 } else {
                     for s in detail.streams.iter().take(limit) {
-                        println!("    [{}] {} - {}", s.status, s.title, s.url);
+                        let thumbnail = s.thumbnail_url.as_deref().filter(|u| !u.is_empty());
+                        match thumbnail {
+                            Some(url) => match print_stream_thumbnail(url, 6).await {
+                                Ok((w, h)) => {
+                                    execute!(stdout(), MoveRight((2 + w + 1) as u16))?;
+                                    println!("[{}] {} - {}", s.status, s.title, s.url);
+                                    if h > 1 {
+                                        execute!(stdout(), MoveDown((h - 1) as u16), MoveToColumn(0))?;
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!("    (could not render stream thumbnail: {err})");
+                                    println!("    [{}] {} - {}", s.status, s.title, s.url);
+                                }
+                            },
+                            None => println!("    [{}] {} - {}", s.status, s.title, s.url),
+                        }
                     }
                 }
 

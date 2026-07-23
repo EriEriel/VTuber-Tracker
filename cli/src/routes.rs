@@ -125,6 +125,11 @@ pub struct StreamInfo {
     pub title: String,
     pub status: String,
     pub url: String,
+    // thumbnailUrl is optional/nullable/empty-string on the backend schema —
+    // not every stream (e.g. some sources, or a stream synced before this
+    // field existed) is guaranteed to have one.
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +185,27 @@ pub async fn print_thumbnail(url: &str) -> Result<(), Box<dyn std::error::Error>
     };
     viuer::print(&img, &conf)?;
     Ok(())
+}
+
+// Same fetch/decode/render as print_thumbnail, but for placing a smaller
+// image beside a line of text rather than stacked above it. `restore_cursor`
+// snaps the cursor back to where it was *before* drawing (viuer saves that
+// position internally, prior to applying `x`), so the caller can then move
+// right by the returned (width, height) and print text on the same row,
+// instead of the cursor landing below the image like print_thumbnail's does.
+pub async fn print_stream_thumbnail(url: &str, width: u32) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let bytes = client.get(url).send().await?.bytes().await?;
+    let img = image::load_from_memory(&bytes)?;
+
+    let conf = viuer::Config {
+        width: Some(width),
+        x: 2,
+        absolute_offset: false,
+        restore_cursor: true,
+        ..Default::default()
+    };
+    Ok(viuer::print(&img, &conf)?)
 }
 
 async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
