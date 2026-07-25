@@ -1,18 +1,41 @@
 use std::option::Option;
 
+use crate::config::api_url;
 use crate::models::{Platform, VtuberChannel,Source};
 use serde::{Deserialize, Serialize};
 
+// Reads a response body, turning a non-2xx status into a readable error.
+//
+// Without this the error-shaped JSON body of a failure ({"error": "..."})
+// gets handed straight to serde, which fails with something like
+// `invalid type: map, expected a sequence` — technically true and completely
+// unhelpful for the actual problem, which is usually a missing token.
+async fn read_body(res: reqwest::Response) -> Result<String, Box<dyn std::error::Error>> {
+    let status = res.status();
+    let body = res.text().await?;
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(
+            "backend rejected the request (401 Unauthorized) — check the auth token with `oshihub config`"
+                .into(),
+        );
+    }
+    if !status.is_success() {
+        return Err(format!("backend returned {status}: {body}").into());
+    }
+
+    Ok(body)
+}
+
 pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new(); 
+    let client = crate::config::client();
     let res = client
-        .get("http://localhost:3000/api/vtubers")
+        .get(format!("{}/api/vtubers", api_url()))
         .send()
-        .await?
-        .text()
         .await?;
 
-    let vtubers: Vec<VtuberChannel> = serde_json::from_str(&res)?;
+    let body = read_body(res).await?;
+    let vtubers: Vec<VtuberChannel> = serde_json::from_str(&body)?;
     Ok(vtubers)
 }
 
@@ -57,9 +80,9 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), Box<dyn std::error::
         channel_id,
     };
 
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .post("http://localhost:3000/api/vtubers")
+        .post(format!("{}/api/vtubers", api_url()))
         .json(&body)
         .send()
         .await?;
@@ -82,9 +105,9 @@ pub async fn delete_vtuber_channel(name: &str) -> Result<(), Box<dyn std::error:
         .first()
         .ok_or_else(|| format!("No VTuber matching '{}' found", name))?;
 
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .delete(format!("http://localhost:3000/api/vtubers/{}", v.id))
+        .delete(format!("{}/api/vtubers/{}", api_url(), v.id))
         .send()
         .await?;
 
@@ -101,16 +124,15 @@ pub async fn delete_vtuber_channel(name: &str) -> Result<(), Box<dyn std::error:
 }
 
 pub async fn lookup_by_name(name: &str) -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .get("http://localhost:3000/api/vtubers")
+        .get(format!("{}/api/vtubers", api_url()))
         .query(&[("name", name)])
         .send()
-        .await?
-        .text()
         .await?;
 
-    let vtubers: Vec<VtuberChannel> = serde_json::from_str(&res)?;
+    let body = read_body(res).await?;
+    let vtubers: Vec<VtuberChannel> = serde_json::from_str(&body)?;
     Ok(vtubers)
 }
 
@@ -150,15 +172,14 @@ pub struct VtuberDetail {
 // only needs streams/clips for now — serde ignores fields a struct doesn't
 // declare, so there's no need to model the rest.
 pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .get(format!("http://localhost:3000/api/vtubers/{id}"))
+        .get(format!("{}/api/vtubers/{id}", api_url()))
         .send()
-        .await?
-        .text()
         .await?;
 
-    let detail: VtuberDetail = serde_json::from_str(&res)?;
+    let body = read_body(res).await?;
+    let detail: VtuberDetail = serde_json::from_str(&body)?;
     Ok(detail)
 }
 
@@ -169,7 +190,7 @@ pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, Box<dyn std::
 // takes an already-decoded image, not raw bytes — it only owns the
 // terminal-output half, not fetching or decoding.
 pub async fn print_thumbnail(url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::external_client();
     let bytes = client.get(url).send().await?.bytes().await?;
     let img = image::load_from_memory(&bytes)?;
 
@@ -194,7 +215,7 @@ pub async fn print_thumbnail(url: &str) -> Result<(), Box<dyn std::error::Error>
 // right by the returned (width, height) and print text on the same row,
 // instead of the cursor landing below the image like print_thumbnail's does.
 pub async fn print_stream_thumbnail(url: &str, width: u32) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::external_client();
     let bytes = client.get(url).send().await?.bytes().await?;
     let img = image::load_from_memory(&bytes)?;
 
@@ -224,22 +245,21 @@ pub struct LiveEntry {
 }
 
 pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .get("http://localhost:3000/api/vtubers/live")
+        .get(format!("{}/api/vtubers/live", api_url()))
         .send()
-        .await?
-        .text()
         .await?;
 
-    let live: Vec<LiveEntry> = serde_json::from_str(&res)?;
+    let body = read_body(res).await?;
+    let live: Vec<LiveEntry> = serde_json::from_str(&body)?;
     Ok(live)
 }
 
 async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
+    let client = crate::config::client();
     let res = client
-        .get(format!("http://localhost:3000/api/vtubers/{id}/profile-url"))
+        .get(format!("{}/api/vtubers/{id}/profile-url", api_url()))
         .send()
         .await?;
 
@@ -283,9 +303,9 @@ pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), Box<dyn std:
                         Source::Twitch_api => "twitch",
                     };
 
-                    let client = reqwest::Client::new();
+                    let client = crate::config::client();
                     let res = client
-                        .post(format!("http://localhost:3000/api/sync/{sync_path}?id={}&force=true", v.id))
+                        .post(format!("{}/api/sync/{sync_path}?id={}&force=true", api_url(), v.id))
                         .send()
                         .await?;
 
@@ -302,9 +322,9 @@ pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), Box<dyn std:
             }
         }
         None => {
-                let client = reqwest::Client::new();
+                let client = crate::config::client();
                 let res = client
-                    .post("http://localhost:3000/api/sync/all")
+                    .post(format!("{}/api/sync/all", api_url()))
                     .body("force=true")
                     .send()
                     .await?;

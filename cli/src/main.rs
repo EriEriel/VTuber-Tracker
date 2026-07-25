@@ -1,3 +1,4 @@
+mod config;
 mod models;
 mod routes;
 
@@ -68,6 +69,8 @@ enum Commands {
     /// List VTubers who are currently live
     #[command(alias = "lv")]
     Live,
+    /// Show the resolved backend URL and where it came from
+    Config,
 }
 
 #[tokio::main]
@@ -194,6 +197,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("  {}", entry.stream.url);
                 println!();
+            }
+        }
+        Commands::Config => {
+            let cfg = config::config();
+            println!("Backend URL: {}", cfg.api_url);
+            match &cfg.source {
+                config::ConfigSource::Env => {
+                    println!("Source:      OSHIHUB_API_URL environment variable")
+                }
+                config::ConfigSource::File(path) => println!("Source:      {}", path.display()),
+                config::ConfigSource::Default => {
+                    // Deliberately doesn't claim "no config file exists" — this
+                    // branch is also reached when one exists but is empty or
+                    // failed to parse (a warning above says which).
+                    println!("Source:      built-in default");
+                    if let Some(path) = config::config_path() {
+                        println!("\nTo point at another backend, either set OSHIHUB_API_URL");
+                        println!("or create {} containing:", path.display());
+                        println!("\n    api_url = \"http://your-host:3000\"");
+                        println!("    api_token = \"<shared secret>\"");
+                    }
+                }
+            }
+
+            // Never print the token itself — just whether one is set and
+            // where it came from, which is all that's needed to debug a 401.
+            match &cfg.token_source {
+                Some(config::ConfigSource::Env) => {
+                    println!("Auth token:  set (OSHIHUB_API_TOKEN environment variable)")
+                }
+                Some(config::ConfigSource::File(path)) => {
+                    println!("Auth token:  set ({})", path.display())
+                }
+                Some(config::ConfigSource::Default) | None => {
+                    println!("Auth token:  not set (fine for a local backend without API_TOKEN)")
+                }
             }
         }
     }
