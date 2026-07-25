@@ -56,6 +56,12 @@ const port = Number(process.env.PORT) || 3000;
 
 Bun.serve({
   port,
+  // Bun defaults to 10s and measures *socket silence*, not request duration —
+  // it can't tell a still-working handler from a vanished client. A forced
+  // sync fans out to Twitch/HoloDex/YouTube and routinely runs past that, so
+  // Bun closed the connection mid-request and Caddy reported it as 502.
+  // 120s is well clear of the slowest observed sync (Bun caps this at 255).
+  idleTimeout: 120,
   fetch: app.fetch
 })
 
