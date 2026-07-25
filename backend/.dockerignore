@@ -1,0 +1,15 @@
+# Secrets must never enter the build context — anything COPY'd lands in an
+# image layer permanently, recoverable even if a later layer deletes it.
+.env
+.env.*
+
+# Reinstalled inside the image against the platform it actually runs on.
+node_modules
+
+# Local-only notes and docs, irrelevant to the running service.
+CLAUDE.md
+Claude Context
+*.md
+
+.git
+.gitignore

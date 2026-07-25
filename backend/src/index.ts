@@ -7,8 +7,20 @@ import { syncRoute } from './routes/sync';
 import { authRoute } from './routes/auth';
 import { connectToDatabase } from './lib/db';
 import { startEventSubListener } from './lib/twitch-eventsub';
+import { requireApiToken, assertApiTokenConfigured } from './lib/require-api-token';
+
+assertApiTokenConfigured();
 
 const app = new Hono();
+
+// Everything that touches the database or spends an external API quota sits
+// behind the shared secret. /auth/* is deliberately NOT covered: it's a
+// browser redirect flow (Twitch sends the user back to /auth/twitch/callback),
+// so it can't carry an Authorization header. Its safety rests on the callback
+// being useless without a valid Twitch-issued code — and on the fact that
+// initial authorization is meant to be done locally, not on the public host.
+app.use('/api/*', requireApiToken);
+app.use('/sync/*', requireApiToken);
 
 // Mount API routes
 app.route('/', vtubersRoute);
@@ -20,13 +32,24 @@ app.route('/', holodexTestRoute);
 app.route('/', youtubeTestRoute);
 app.route('/', twitchTestRoute);
 
-export default app;
+// Deliberately no `export default app`. Bun's entry wrapper checks whether
+// the entry module's default export looks like a server config, and a Hono
+// instance does (it has `fetch`) — so exporting it makes Bun call
+// Bun.serve() on it *in addition* to the explicit call below, and the second
+// bind fails with EADDRINUSE. `bun run --hot` skips that wrapper, so this
+// only ever showed up outside dev (e.g. in the container).
 
 await connectToDatabase();
 startEventSubListener();
 
+// Configurable so the container can be remapped without a rebuild; keeps
+// the previous hardcoded 3000 as the default for local dev.
+const port = Number(process.env.PORT) || 3000;
+
 Bun.serve({
-  port: 3000,
+  port,
   fetch: app.fetch
 })
+
+console.log(`Listening on port ${port}`);
 
