@@ -1,7 +1,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
-import { resolveTwitchUser, extractYoutubeHandle, resolveYoutubeHandle, fetchTwitchUserById } from '../lib/sync';
+import {
+  resolveTwitchUser,
+  extractYoutubeHandle,
+  resolveYoutubeHandle,
+  fetchTwitchUserById,
+  syncFromHolodex,
+  syncFromYoutube,
+  syncFromTwitch,
+} from '../lib/sync';
 import { subscribeToLive, unsubscribeFromLive } from '../lib/twitch-eventsub';
 
 export const vtubersRoute = new Hono();
@@ -165,6 +173,16 @@ vtubersRoute.post('/api/vtubers', async (c) => {
       lastLiveSyncedAt: null,
       lastStatsSyncedAt: null,
     });
+
+    // Fire-and-forget: registration only resolves identity (name/photo/
+    // platformChannelId) above, it never touches Stream/Clip — without this,
+    // a freshly-registered VTuber sits with empty streams/clips until
+    // someone calls POST /api/sync/* by hand. Not awaited so a slow or
+    // failing sync doesn't fail registration itself.
+    const initialSync = source === 'holodex' ? syncFromHolodex : source === 'youtube_api' ? syncFromYoutube : syncFromTwitch;
+    initialSync(vtuber._id.toString(), true).catch((err) =>
+      console.error(`Initial sync failed for ${vtuber.englishName}:`, err)
+    );
 
     if (platform === 'twitch') {
       // Fire-and-forget: a subscribe hiccup shouldn't fail registration,
