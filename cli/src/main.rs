@@ -8,6 +8,7 @@ use std::io::stdout;
 use crate::routes::{
     fetch_vtubers,
     fetch_vtuber_detail,
+    fetch_live_vtubers,
     jump_to,
     create_vtuber_channel,
     lookup_by_name,
@@ -64,6 +65,9 @@ enum Commands {
     Sync {
         name: String,
     },
+    /// List VTubers who are currently live
+    #[command(alias = "lv")]
+    Live,
 }
 
 #[tokio::main]
@@ -148,6 +152,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Commands::Sync { name } => {
             sync_vtuber_channels(Some(&name)).await?;
+        }
+        Commands::Live => {
+            let live = fetch_live_vtubers().await?;
+            if live.is_empty() {
+                println!("No VTuber is currently live");
+            }
+
+            for entry in &live {
+                let thumbnail = entry
+                    .stream
+                    .thumbnail_url
+                    .as_deref()
+                    .filter(|u| !u.is_empty());
+
+                match thumbnail {
+                    Some(url) => match print_stream_thumbnail(url, 6).await {
+                        Ok((w, h)) => {
+                            execute!(stdout(), MoveRight((2 + w + 1) as u16))?;
+                            println!(
+                                "{} ({}) - {}",
+                                entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
+                            );
+                            if h > 1 {
+                                execute!(stdout(), MoveDown((h - 1) as u16), MoveToColumn(0))?;
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("  (could not render stream thumbnail: {err})");
+                            println!(
+                                "{} ({}) - {}",
+                                entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
+                            );
+                        }
+                    },
+                    None => println!(
+                        "{} ({}) - {}",
+                        entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
+                    ),
+                }
+
+                println!("  {}", entry.stream.url);
+                println!();
+            }
         }
     }
 

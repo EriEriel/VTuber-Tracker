@@ -208,6 +208,55 @@ vtubersRoute.get('/api/vtubers', async (c) => {
 });
 
 /**
+ * GET /api/vtubers/live
+ * List VTubers who currently have a live stream. Registered before
+ * GET /api/vtubers/:id so "live" isn't swallowed as an :id param.
+ */
+vtubersRoute.get('/api/vtubers/live', async (c) => {
+  try {
+    const liveStreams = await Stream.find({ status: 'live' }).sort({ startTime: -1 });
+
+    // A VTuber should only ever have one truly-live stream, but a rapid
+    // disconnect/reconnect can fire stream.online twice before stream.offline
+    // catches up, leaving more than one `status: 'live'` doc behind (seen live
+    // in prod data). Streams are already sorted newest-first, so keeping the
+    // first occurrence per vtuberId picks the actually-current one.
+    const seenVtuberIds = new Set<string>();
+    const currentLiveStreams = liveStreams.filter((s) => {
+      const key = s.vtuberId.toString();
+      if (seenVtuberIds.has(key)) return false;
+      seenVtuberIds.add(key);
+      return true;
+    });
+
+    const vtubers = await VTuber.find({ _id: { $in: [...seenVtuberIds] } });
+    const vtubersById = new Map(vtubers.map((v) => [v._id.toString(), v]));
+
+    const results = currentLiveStreams
+      .map((s) => {
+        const vtuber = vtubersById.get(s.vtuberId.toString());
+        // Stream outlived its VTuber (deletion doesn't retroactively end streams
+        // subscribed before it, though delete does cascade-remove them now).
+        if (!vtuber) return null;
+        return {
+          vtuber,
+          stream: {
+            title: s.title,
+            url: s.url,
+            thumbnailUrl: s.thumbnailUrl,
+            startTime: s.startTime,
+          },
+        };
+      })
+      .filter((r) => r !== null);
+
+    return c.json(results);
+  } catch (error) {
+    return c.json({ error: 'Failed to list live VTubers', detail: String(error) }, 500);
+  }
+});
+
+/**
  * GET /api/vtubers/:id
  * Retrieve single VTuber detail with associated records
  */

@@ -208,6 +208,34 @@ pub async fn print_stream_thumbnail(url: &str, width: u32) -> Result<(u32, u32),
     Ok(viuer::print(&img, &conf)?)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveStreamInfo {
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LiveEntry {
+    pub vtuber: VtuberChannel,
+    pub stream: LiveStreamInfo,
+}
+
+pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("http://localhost:3000/api/vtubers/live")
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let live: Vec<LiveEntry> = serde_json::from_str(&res)?;
+    Ok(live)
+}
+
 async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let res = client
