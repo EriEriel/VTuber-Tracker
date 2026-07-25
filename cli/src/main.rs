@@ -1,6 +1,7 @@
 mod config;
 mod models;
 mod routes;
+mod theme;
 
 use clap::{Parser, Subcommand};
 use crossterm::execute;
@@ -84,7 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             vtubers.iter().for_each(|v| {
                 println!(
                     "{} ({}) - {}",
-                    v.english_name, v.name, v.platform_channel_id
+                    theme::name(&v.english_name),
+                    theme::muted(&v.name),
+                    theme::muted(&v.platform_channel_id)
                 );
             });
         }
@@ -102,7 +105,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for v in &vtubers {
                 println!(
                     "{} ({}) - {}",
-                    v.english_name, v.name, v.platform_channel_id
+                    theme::name(&v.english_name),
+                    theme::muted(&v.name),
+                    theme::muted(&v.platform_channel_id)
                 );
 
                 if let Err(err) = print_thumbnail(&v.photo).await {
@@ -111,11 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let detail = fetch_vtuber_detail(&v.id).await?;
                 let is_live = detail.streams.iter().any(|s| s.status == "live");
-                println!("  Status: {}", if is_live { "LIVE" } else { "offline" });
+                println!("  {} {}", theme::heading("Status:"), theme::live_status(is_live));
 
-                println!("  Recent streams:");
+                println!("  {}", theme::heading("Recent streams:"));
                 if detail.streams.is_empty() {
-                    println!("    (none)");
+                    println!("    {}", theme::muted("(none)"));
                 } else {
                     for s in detail.streams.iter().take(limit) {
                         let thumbnail = s.thumbnail_url.as_deref().filter(|u| !u.is_empty());
@@ -123,27 +128,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(url) => match print_stream_thumbnail(url, 6).await {
                                 Ok((w, h)) => {
                                     execute!(stdout(), MoveRight((2 + w + 1) as u16))?;
-                                    println!("[{}] {} - {}", s.status, s.title, s.url);
+                                    println!(
+                                        "{} {} - {}",
+                                        theme::status_tag(&s.status),
+                                        s.title,
+                                        theme::url(&s.url)
+                                    );
                                     if h > 1 {
                                         execute!(stdout(), MoveDown((h - 1) as u16), MoveToColumn(0))?;
                                     }
                                 }
                                 Err(err) => {
                                     eprintln!("    (could not render stream thumbnail: {err})");
-                                    println!("    [{}] {} - {}", s.status, s.title, s.url);
+                                    println!(
+                                        "    {} {} - {}",
+                                        theme::status_tag(&s.status),
+                                        s.title,
+                                        theme::url(&s.url)
+                                    );
                                 }
                             },
-                            None => println!("    [{}] {} - {}", s.status, s.title, s.url),
+                            None => println!(
+                                "    {} {} - {}",
+                                theme::status_tag(&s.status),
+                                s.title,
+                                theme::url(&s.url)
+                            ),
                         }
                     }
                 }
 
-                println!("  Recent clips:");
+                println!("  {}", theme::heading("Recent clips:"));
                 if detail.clips.is_empty() {
-                    println!("    (none)");
+                    println!("    {}", theme::muted("(none)"));
                 } else {
                     for c in detail.clips.iter().take(limit) {
-                        println!("    {} ({} views) - {}", c.title, c.view_count, c.url);
+                        println!(
+                            "    {} ({}) - {}",
+                            c.title,
+                            theme::muted(&format!("{} views", c.view_count)),
+                            theme::url(&c.url)
+                        );
                     }
                 }
 
@@ -159,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Live => {
             let live = fetch_live_vtubers().await?;
             if live.is_empty() {
-                println!("No VTuber is currently live");
+                println!("{}", theme::muted("No VTuber is currently live"));
             }
 
             for entry in &live {
@@ -169,33 +194,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .as_deref()
                     .filter(|u| !u.is_empty());
 
+                // Every entry here is by definition live, so the tag is
+                // constant — it's kept for a consistent scan line with Lookup.
+                let headline = format!(
+                    "{} {} - {}",
+                    theme::status_tag("live"),
+                    theme::name(&entry.vtuber.english_name),
+                    entry.stream.title
+                );
+
                 match thumbnail {
                     Some(url) => match print_stream_thumbnail(url, 6).await {
                         Ok((w, h)) => {
                             execute!(stdout(), MoveRight((2 + w + 1) as u16))?;
-                            println!(
-                                "{} ({}) - {}",
-                                entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
-                            );
+                            println!("{headline}");
                             if h > 1 {
                                 execute!(stdout(), MoveDown((h - 1) as u16), MoveToColumn(0))?;
                             }
                         }
                         Err(err) => {
                             eprintln!("  (could not render stream thumbnail: {err})");
-                            println!(
-                                "{} ({}) - {}",
-                                entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
-                            );
+                            println!("{headline}");
                         }
                     },
-                    None => println!(
-                        "{} ({}) - {}",
-                        entry.vtuber.english_name, entry.vtuber.name, entry.stream.title
-                    ),
+                    None => println!("{headline}"),
                 }
 
-                println!("  {}", entry.stream.url);
+                println!("  {}", theme::url(&entry.stream.url));
                 println!();
             }
         }
