@@ -1,5 +1,17 @@
 # Twitch EventSub Integration — Plan
 
+> ⚠️ **Transport choice here is superseded — see `LIVE_DETECTION.md` Phase 1.**
+> This document chose **websocket** transport because webhooks need a public
+> HTTPS callback the project didn't have at the time. It does now (VPS +
+> Caddy), and websocket transport turned out to have a `max_total_cost` of 10,
+> capping live tracking at **5 Twitch VTubers** — already exceeded in
+> production, and failing silently.
+>
+> Everything below about the EventSub *protocol* — message types, the
+> reconcile logic, why subscription management needs a user token under
+> websocket transport, the `4003 "connection unused"` behaviour — remains
+> accurate and worth reading.
+
 Status: **implemented**, including `stream.offline`. This document captures the
 approach for adding real-time "went live"/"went offline" notifications for
 Twitch-sourced VTubers, so the project doesn't have to poll Twitch on a timer
