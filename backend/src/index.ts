@@ -39,7 +39,15 @@ app.route('/', twitchTestRoute);
 // bind fails with EADDRINUSE. `bun run --hot` skips that wrapper, so this
 // only ever showed up outside dev (e.g. in the container).
 
-await connectToDatabase();
+try {
+  await connectToDatabase();
+} catch {
+  // connectToDatabase() already logged the reason. Exiting here rather than
+  // letting the rejection go unhandled keeps that one line as the whole
+  // output — an unhandled rejection would print the entire Mongoose error
+  // object again, on every restart of a restarting container.
+  process.exit(1);
+}
 startEventSubListener();
 
 // Configurable so the container can be remapped without a rebuild; keeps
