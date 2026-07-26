@@ -257,6 +257,9 @@ Also test `webhook_callback_verification` with `twitch event verify-subscription
 
 # Phase 2 — YouTube live detection by polling
 
+> **Implemented — see [`YOUTUBE_LIVE.md`](YOUTUBE_LIVE.md)** for how the result
+> actually behaves. This section is the plan and the API research it rests on.
+
 YouTube has no usable push. Research below was verified against the live APIs
 on 2026-07-25.
 

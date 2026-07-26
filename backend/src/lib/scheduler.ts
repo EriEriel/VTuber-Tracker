@@ -87,7 +87,8 @@ async function pollHolodexPopulation(): Promise<void> {
   // poll and skip the offline pass for this cycle only. A cycle or two later,
   // if it's genuinely 0 again, previousHolodexLiveTotal is 0 too and the
   // offline pass resumes normally.
-  const skipOfflinePass = items.length === 0 && state.previousHolodexLiveTotal > 0;
+  const previousTotal = state.previousHolodexLiveTotal;
+  const skipOfflinePass = items.length === 0 && previousTotal > 0;
   state.previousHolodexLiveTotal = items.length;
 
   const liveVtuberIds = new Set<string>();
@@ -104,8 +105,11 @@ async function pollHolodexPopulation(): Promise<void> {
   }
 
   if (skipOfflinePass) {
+    // previousTotal, not state.previousHolodexLiveTotal — that's already been
+    // overwritten with this cycle's 0, and the whole point of the line is to
+    // report how many disappeared at once.
     console.warn(
-      `Holodex live poll returned 0 results (previous cycle had ${state.previousHolodexLiveTotal}) -- treating as a failed poll, skipping offline pass`
+      `Holodex live poll returned 0 results (previous cycle had ${previousTotal}) -- treating as a failed poll, skipping offline pass`
     );
     return;
   }

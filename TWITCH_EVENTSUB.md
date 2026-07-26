@@ -9,6 +9,11 @@ Phase 1; the reasoning and the lessons from the original websocket build are
 preserved in [Appendix: the websocket era](#appendix-the-websocket-era) at the
 bottom, because several of them are still load-bearing knowledge.
 
+The YouTube counterpart is [`YOUTUBE_LIVE.md`](YOUTUBE_LIVE.md). The two are
+deliberately asymmetric — YouTube has no usable push, so it polls — but they
+converge immediately: both write live state only through `markLive`/`markEnded`
+in `src/lib/live-state.ts`.
+
 ## Goal
 
 React to a tracked Twitch VTuber going live within seconds, instead of waiting

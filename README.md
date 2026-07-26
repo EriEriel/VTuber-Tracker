@@ -104,7 +104,9 @@ YOUTUBE_POLL_INTERVAL_MS=300000   # default 5 minutes
 YOUTUBE_POLL_DISABLED=true        # set on a second machine so it doesn't double-poll
 ```
 
-Only run the poller in **one** place — both instances would spend YouTube quota against the same database. See [`LIVE_DETECTION.md`](LIVE_DETECTION.md) for the full design of both.
+Only run the poller in **one** place — both instances would spend YouTube quota against the same database. (Twitch is different: its subscriptions are bound to a shared callback URL, so a second backend converges harmlessly.)
+
+Reference docs: [`TWITCH_EVENTSUB.md`](TWITCH_EVENTSUB.md) and [`YOUTUBE_LIVE.md`](YOUTUBE_LIVE.md) describe each integration as it runs; [`LIVE_DETECTION.md`](LIVE_DETECTION.md) is the design plan both came from.
 
 ## CLI (`oshihub`)
 
