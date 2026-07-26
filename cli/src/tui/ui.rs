@@ -17,31 +17,62 @@ use crate::routes::VtuberDetail;
 /// look like *right now*.
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+
+    // The filter bar only makes sense over the list — Detail/Help keep the
+    // plain two-row layout regardless of whatever `/` last left behind.
+    let show_filter_bar =
+        app.screen == Screen::List && (app.filter_editing || !app.filter.is_empty());
+
+    let (content_area, filter_area, status_area) = if show_filter_bar {
+        let chunks =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+                .split(area);
+        (chunks[1], Some(chunks[0]), chunks[2])
+    } else {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        (chunks[0], None, chunks[1])
+    };
+
+    if let Some(filter_area) = filter_area {
+        draw_filter_bar(frame, filter_area, app);
+    }
 
     if app.screen == Screen::Detail {
-        draw_detail(frame, chunks[0], app);
+        draw_detail(frame, content_area, app);
     } else {
         match &app.load_state {
-            LoadState::Loading => draw_message(frame, chunks[0], "Loading tracked VTubers..."),
-            LoadState::Failed(msg) => draw_message(frame, chunks[0], &format!("Error: {msg}")),
+            LoadState::Loading => draw_message(frame, content_area, "Loading tracked VTubers..."),
+            LoadState::Failed(msg) => draw_message(frame, content_area, &format!("Error: {msg}")),
             LoadState::Loaded if app.items.is_empty() => {
-                draw_message(frame, chunks[0], "No VTubers tracked yet.")
+                draw_message(frame, content_area, "No VTubers tracked yet.")
             }
-            LoadState::Loaded if app.live_only && app.visible_ids().is_empty() => {
-                draw_message(frame, chunks[0], "No one is live right now.")
+            LoadState::Loaded if app.visible_ids().is_empty() && !app.filter.is_empty() => {
+                draw_message(frame, content_area, &format!("No VTubers match '{}'.", app.filter))
             }
-            LoadState::Loaded => draw_list(frame, chunks[0], app),
+            LoadState::Loaded if app.visible_ids().is_empty() && app.live_only => {
+                draw_message(frame, content_area, "No one is live right now.")
+            }
+            LoadState::Loaded => draw_list(frame, content_area, app),
         }
     }
 
-    draw_status_bar(frame, chunks[1], app);
+    draw_status_bar(frame, status_area, app);
 
-    // Overlaid last, on top of whatever chunks[0]/chunks[1] already drew —
-    // closing it returns to exactly what was underneath.
+    // Overlaid last, on top of whatever's already drawn — closing it
+    // returns to exactly what was underneath.
     if app.screen == Screen::Help {
         draw_help(frame, area, app);
     }
+}
+
+/// A persistent `/query` line above the list, shown while editing (with a
+/// cursor) or whenever a filter is committed and non-empty — so it's always
+/// visible *why* the list is narrower than expected, not just while typing.
+fn draw_filter_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let cursor = if app.filter_editing { "▏" } else { "" };
+    let text = format!("/{}{cursor}", app.filter);
+    let style = if app.filter_editing { Style::default() } else { theme::muted() };
+    frame.render_widget(Paragraph::new(text).style(style), area);
 }
 
 fn draw_message(frame: &mut Frame, area: Rect, msg: &str) {
@@ -73,10 +104,13 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let title = if app.live_only {
-        format!(" Tracked VTubers — live only ({}) ", visible.len())
-    } else {
-        format!(" Tracked VTubers ({}) ", app.items.len())
+    let title = match (app.live_only, !app.filter.is_empty()) {
+        (true, true) => format!(" Tracked VTubers — live only, filtered ({}) ", visible.len()),
+        (true, false) => format!(" Tracked VTubers — live only ({}) ", visible.len()),
+        (false, true) => {
+            format!(" Tracked VTubers — filtered ({}/{}) ", visible.len(), app.items.len())
+        }
+        (false, false) => format!(" Tracked VTubers ({}) ", app.items.len()),
     };
 
     let list = List::new(items)
@@ -100,13 +134,19 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let hints = match app.screen {
-        Screen::List if app.live_only => {
-            "j/k move  ·  Enter detail  ·  o open  ·  L show all  ·  ? help  ·  q quit"
+    let hints = if app.filter_editing {
+        "Type to filter  ·  Enter commit  ·  Esc clear  ·  ↑/↓ move"
+    } else {
+        match app.screen {
+            Screen::List if app.live_only => {
+                "j/k move  ·  Enter detail  ·  o open  ·  / filter  ·  L show all  ·  ? help  ·  q quit"
+            }
+            Screen::List => {
+                "j/k move  ·  Enter detail  ·  o open  ·  / filter  ·  L live only  ·  ? help  ·  q quit"
+            }
+            Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
+            Screen::Help => "Esc/h close",
         }
-        Screen::List => "j/k move  ·  Enter detail  ·  o open  ·  L live only  ·  ? help  ·  q quit",
-        Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
-        Screen::Help => "Esc/h close",
     };
     let p = Paragraph::new(hints).style(theme::muted());
     frame.render_widget(p, area);
@@ -278,8 +318,9 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::raw(""),
         Line::styled("j/k, ↑/↓  move          Enter  open detail", theme::muted()),
         Line::styled("o         open browser  Tab    switch pane (in detail)", theme::muted()),
-        Line::styled("L         live only      ?      toggle this help", theme::muted()),
-        Line::styled("q         quit           Esc/h  close/back", theme::muted()),
+        Line::styled("L         live only      /      filter by name", theme::muted()),
+        Line::styled("q         quit          ?      toggle this help", theme::muted()),
+        Line::styled("Esc/h     close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);

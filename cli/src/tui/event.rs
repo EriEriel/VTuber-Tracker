@@ -31,6 +31,15 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         return None;
     }
 
+    // Filter-edit mode swallows the keymap entirely: `q`, `L`, `j`/`k` and
+    // every other letter are all valid *search text*, so this has to
+    // short-circuit before the normal match rather than try to guard each
+    // arm individually.
+    if app.filter_editing {
+        handle_filter_edit(app, key.code);
+        return None;
+    }
+
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Esc => match app.screen {
@@ -45,6 +54,7 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::List => app.next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::List => app.previous(),
         KeyCode::Char('L') if app.screen == Screen::List => app.toggle_live_only(),
+        KeyCode::Char('/') if app.screen == Screen::List => app.start_filter_edit(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
         KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
@@ -71,4 +81,19 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
     }
 
     None
+}
+
+/// Arrow keys (not `j`/`k` — those are letters someone might be typing)
+/// still move the selection live, matching how most fuzzy-finders behave
+/// while their input has focus.
+fn handle_filter_edit(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char(c) => app.filter_push(c),
+        KeyCode::Backspace => app.filter_backspace(),
+        KeyCode::Enter => app.commit_filter(),
+        KeyCode::Esc => app.clear_filter(),
+        KeyCode::Down => app.next(),
+        KeyCode::Up => app.previous(),
+        _ => {}
+    }
 }

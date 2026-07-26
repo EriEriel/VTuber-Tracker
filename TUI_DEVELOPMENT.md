@@ -1,6 +1,6 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–3 implemented**, Phases 4–7 planned, Phase 8 deferred.
+Status: **Phases 0–4 implemented**, Phases 5–7 planned, Phase 8 deferred.
 Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -349,19 +349,39 @@ live set shows "No one is live right now." instead of an empty list; `j`/`k`/
 
 # Phase 4 — Search and filter
 
-Maps `lookup`'s search half.
+Maps `lookup`'s search half. **Done**, reviewed by running.
 
-- [ ] `/` enters filter mode, filtering incrementally as you type
-- [ ] `Esc` clears, `Enter` commits and returns focus to the list
-- [ ] Selection stays valid as the list shrinks
+- [x] `/` enters filter mode, filtering incrementally as you type
+- [x] `Esc` clears, `Enter` commits and returns focus to the list
+- [x] Selection stays valid as the list shrinks
 
 **Client-side filtering, not a request per keystroke.** `oshihub lookup` hits
 `GET /api/vtubers?name=` because a one-shot command has nothing cached. The TUI
 already holds the full list and the dataset is tiny, so filtering locally is
 both faster and kinder to the backend.
 
+Turned out to be exactly the reuse Phase 3 set up for: `App::visible_ids()`
+now chains a `live_only` predicate and a `filter` predicate, so `L` and `/`
+compose freely instead of needing to know about each other — no new
+selection-safety mechanism, `ensure_selection_valid` from Phase 3 covers this
+too.
+
+`filter_editing` is a short-circuit at the *top* of `handle_event`, not a
+guard threaded through the existing match arms — while typing a query,
+`q`/`L`/`j`/`k`/etc. are all literal characters, not commands, and getting
+that right per-arm would be one missed guard away from `q` quitting the app
+mid-search. `Esc` and `Enter` diverge deliberately: `Esc` clears the text
+*and* exits editing (`App::clear_filter`); `Enter` only exits editing,
+keeping the filter applied (`App::commit_filter`) — pressing `/` again
+resumes editing the same text rather than starting over. Arrow keys (not
+`j`/`k`) still move the selection live while editing, matching how most
+fuzzy-finders behave with their input focused.
+
 **Review:** typing filters live; selection never points off the end; `Esc`
-restores the full list.
+restores the full list; `Enter` keeps the filter applied and returns to
+normal navigation; re-opening `/` continues editing rather than clearing;
+`L` and `/` compose; no matches shows "No VTubers match '...'" instead of an
+empty list.
 
 ---
 

@@ -109,6 +109,16 @@ pub struct App {
     /// nothing else needs to know about the filter, since selection and
     /// rendering both already go through `visible_ids`.
     pub live_only: bool,
+    /// `/`'s typed text, matched case-insensitively against `VtuberRow.name`
+    /// — client-side, not a request per keystroke, since the TUI already
+    /// holds the full (small) list. Persists after `Enter` commits, so
+    /// pressing `/` again continues editing rather than starting over.
+    pub filter: String,
+    /// Whether `/`'s text-input mode is active. While `true`, `event.rs`
+    /// short-circuits before the normal keymap — every printable character
+    /// is filter text, not a command, which is why `q`/`L`/etc. all need to
+    /// keep working normally as soon as this goes back to `false`.
+    pub filter_editing: bool,
     /// Last background-action failure (currently only `o`'s open-in-browser),
     /// shown in the status bar until the next action or screen change clears
     /// it. Unlike a list/detail load failure, an action failure has no
@@ -141,6 +151,8 @@ impl App {
             clip_state: ListState::default(),
             live_ids: HashSet::new(),
             live_only: false,
+            filter: String::new(),
+            filter_editing: false,
             last_error: None,
         }
     }
@@ -153,20 +165,24 @@ impl App {
     }
 
     /// Indices into `items` that should actually render/be navigable right
-    /// now — every row unfiltered, or only the live ones when `live_only` is
-    /// set. `list_state`'s selected index is always a position *into this*,
-    /// not into `items` directly, which is what lets Phase 4's incremental
-    /// filter later reuse the same indirection for free text matching.
+    /// now — narrowed by `live_only` and/or `filter`, composed here rather
+    /// than each keeping a separate mechanism. `list_state`'s selected index
+    /// is always a position *into this*, not into `items` directly.
     pub fn visible_ids(&self) -> Vec<usize> {
-        if !self.live_only {
-            return (0..self.items.len()).collect();
-        }
         self.items
             .iter()
             .enumerate()
-            .filter(|(_, row)| self.live_ids.contains(&row.id))
+            .filter(|(_, row)| !self.live_only || self.live_ids.contains(&row.id))
+            .filter(|(_, row)| self.matches_filter(row))
             .map(|(i, _)| i)
             .collect()
+    }
+
+    fn matches_filter(&self, row: &VtuberRow) -> bool {
+        if self.filter.is_empty() {
+            return true;
+        }
+        row.name.to_lowercase().contains(&self.filter.to_lowercase())
     }
 
     pub fn selected(&self) -> Option<&VtuberRow> {
@@ -198,6 +214,33 @@ impl App {
         if self.live_only {
             self.ensure_selection_valid();
         }
+    }
+
+    pub fn start_filter_edit(&mut self) {
+        self.filter_editing = true;
+    }
+
+    /// `Enter`: stop editing, keep the typed text and the filtered view.
+    pub fn commit_filter(&mut self) {
+        self.filter_editing = false;
+    }
+
+    /// `Esc`: stop editing *and* drop the text, restoring the full list —
+    /// distinct from `commit_filter`, which keeps the filter applied.
+    pub fn clear_filter(&mut self) {
+        self.filter.clear();
+        self.filter_editing = false;
+        self.ensure_selection_valid();
+    }
+
+    pub fn filter_push(&mut self, c: char) {
+        self.filter.push(c);
+        self.ensure_selection_valid();
+    }
+
+    pub fn filter_backspace(&mut self) {
+        self.filter.pop();
+        self.ensure_selection_valid();
     }
 
     pub fn go_back_to_list(&mut self) {
