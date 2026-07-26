@@ -157,6 +157,19 @@ oshihub watch --interval 30
 oshihub watch --notify-existing    # also notify for whoever is already live
 ```
 
+#### Why not just use Twitch's and YouTube's own notifications?
+
+For a single platform, you probably should — this isn't trying to beat Twitch at delivering Twitch alerts. The case for it is that they're *two separate systems*, neither of which you control:
+
+- **One feed instead of two.** Twitch notifies through Twitch, YouTube through YouTube, each with its own settings, delivery quirks, and places to miss things. This is one stream of notifications for both, driven by the same roster you already manage with `create`/`list`.
+- **No browser, no account, no bell.** Web push needs a browser running with the site permission granted; the apps need an account you're logged into and a notification toggle you remembered to set. `oshihub watch` is a ~4 MB resident process, and it notifies for anyone you've *registered* — whether you follow them is irrelevant. Useful if you'd rather not have an account, or not be logged into one.
+- **It reports state, not intent.** The notification fires because the API says the stream is live. YouTube's bell in particular is well known for quietly not delivering, and neither platform tells you when it decided to skip one.
+- **They're ordinary desktop notifications, so your rules apply.** Under mako, `[app-name=oshihub]` lets you restyle, group, or route them, and they honour do-not-disturb like anything else on the system. No browser tab has to be open for one to arrive.
+
+**The honest tradeoff is latency, and it cuts both ways.** Twitch's own push is effectively instant, while this adds up to one poll interval on top (~30s average at the default), so for Twitch alone it is strictly slower. For YouTube the comparison inverts: the backend's detection floor is ~5 minutes, which in practice still tends to beat a bell notification that may arrive late or not at all.
+
+It also only notifies while the machine is on and the watcher is running — there's no phone or push story here, deliberately. If you want to be reached when you're away from your desk, the platforms' own apps are the right tool and this isn't a replacement for them.
+
 Whoever is live when it starts is treated as the quiet baseline and printed to the terminal rather than notified about — otherwise starting it would fire a burst of popups for streams you already knew about. `--notify-existing` opts out of that, which is also the easiest way to check notifications work without waiting for someone to go live.
 
 Requires `notify-send` (from `libnotify`) and a notification daemon. Without either, it degrades to terminal output and says so once rather than failing.
@@ -240,7 +253,9 @@ your-host.example.com {
 
 These are evaluated separately, so a single call can refresh live status while skipping stats (or vice versa), depending on which gate has expired. Pass `?force=true` to bypass both gates unconditionally.
 
-There is no scheduler — sync only runs when a request hits one of these routes, or when Twitch EventSub reports that a tracked channel went live. Registering a VTuber triggers an initial sync automatically, so a new entry has streams and clips immediately.
+Full syncs (stats, clips, VOD backfill) run only when a request hits one of these routes. Registering a VTuber triggers an initial sync automatically, so a new entry has streams and clips immediately.
+
+Live status is separate and does update on its own — Twitch pushes it via EventSub, and the YouTube poller derives it every 5 minutes (see [Live detection](#4-live-detection-optional)). Both write through the same `markLive`/`markEnded` pair, which is the only thing in the backend that sets a stream live or ends it.
 
 ### Twitch channel name → ID resolution
 
@@ -282,9 +297,10 @@ CLI coverage of the backend:
 - [x] Delete
 - [x] Force sync via `sync`
 - [x] Configurable backend URL and auth token
+- [x] Desktop notifications on going live via `watch`
 
 Known gaps:
 
-- No scheduler — live status is only current for Twitch (via EventSub) or after a manual `sync`.
-- YouTube has no "went live" push equivalent to Twitch's EventSub; polling is the planned approach.
+- No `update` command, despite `PUT /api/vtubers/:id` existing on the backend.
+- `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify.
 - A TUI dashboard is planned but not started.
