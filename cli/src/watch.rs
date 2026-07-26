@@ -15,6 +15,7 @@
 // the async loop underneath it is glue.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use crate::config;
@@ -194,12 +195,14 @@ pub async fn run(opts: WatchOptions) -> Result<(), Box<dyn std::error::Error>> {
         "Watching for live VTubers via {}",
         theme::url(config::api_url())
     );
-    println!(
-        "{}",
-        theme::muted(&format!(
-            "Polling every {interval_secs}s. Ctrl-C to stop."
-        ))
-    );
+    // Only mention Ctrl-C when there's someone at a keyboard. Under a systemd
+    // user service this same line goes to the journal, where it's just wrong.
+    let hint = if std::io::stdout().is_terminal() {
+        format!("Polling every {interval_secs}s. Ctrl-C to stop.")
+    } else {
+        format!("Polling every {interval_secs}s.")
+    };
+    println!("{}", theme::muted(&hint));
     println!();
 
     // --notify-existing skips the quiet baseline so everyone currently live

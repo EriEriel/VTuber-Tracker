@@ -168,6 +168,7 @@ Avatars are cached to `~/.cache/oshihub/avatars/` (the only thing the CLI ever w
 ```ini
 [Unit]
 Description=oshihub live VTuber notifications
+PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
@@ -181,6 +182,8 @@ WantedBy=graphical-session.target
 ```
 
 Then `systemctl --user daemon-reload && systemctl --user enable --now oshihub-watch`, and read its output with `journalctl --user -u oshihub-watch -f`.
+
+`ExecStart` points at the *installed* binary, so re-run `cargo install --path cli` and `systemctl --user restart oshihub-watch` after changing the CLI — otherwise the service keeps running the old build.
 
 A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't loop on it. Note there's no locking: a terminal instance *and* an enabled service means two watchers and duplicate notifications.
 
