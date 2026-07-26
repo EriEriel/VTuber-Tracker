@@ -1,8 +1,10 @@
+use std::collections::HashSet;
+
 use ratatui::widgets::ListState;
 
 use crate::config::{self, ConfigSource};
 use crate::models::{Platform, VtuberChannel};
-use crate::routes::VtuberDetail;
+use crate::routes::{LiveEntry, VtuberDetail};
 
 /// Minimal shape for what the list *and* detail screens need.
 /// Map existing API DTO into this at the boundary (same mapper-at-the-
@@ -99,6 +101,14 @@ pub struct App {
     pub detail_focus: DetailFocus,
     pub stream_state: ListState,
     pub clip_state: ListState,
+    /// Ids of currently-live VTubers, from the last `fetch_live_vtubers`.
+    /// Empty until that fetch resolves — badges just don't show yet, same as
+    /// the rest of the list before its own fetch resolves.
+    pub live_ids: HashSet<String>,
+    /// `L`'s toggle. When set, `visible_ids` narrows to `live_ids` members —
+    /// nothing else needs to know about the filter, since selection and
+    /// rendering both already go through `visible_ids`.
+    pub live_only: bool,
     /// Last background-action failure (currently only `o`'s open-in-browser),
     /// shown in the status bar until the next action or screen change clears
     /// it. Unlike a list/detail load failure, an action failure has no
@@ -129,6 +139,8 @@ impl App {
             detail_focus: DetailFocus::Streams,
             stream_state: ListState::default(),
             clip_state: ListState::default(),
+            live_ids: HashSet::new(),
+            live_only: false,
             last_error: None,
         }
     }
@@ -140,8 +152,52 @@ impl App {
         };
     }
 
+    /// Indices into `items` that should actually render/be navigable right
+    /// now — every row unfiltered, or only the live ones when `live_only` is
+    /// set. `list_state`'s selected index is always a position *into this*,
+    /// not into `items` directly, which is what lets Phase 4's incremental
+    /// filter later reuse the same indirection for free text matching.
+    pub fn visible_ids(&self) -> Vec<usize> {
+        if !self.live_only {
+            return (0..self.items.len()).collect();
+        }
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| self.live_ids.contains(&row.id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     pub fn selected(&self) -> Option<&VtuberRow> {
-        self.list_state.selected().and_then(|i| self.items.get(i))
+        let visible = self.visible_ids();
+        let i = self.list_state.selected()?;
+        visible.get(i).and_then(|&idx| self.items.get(idx))
+    }
+
+    /// Snaps `list_state` back into range after the visible set changes size
+    /// out from under it (toggling the live filter, or the live set itself
+    /// updating) — an out-of-range index isn't unsafe (ratatui just renders
+    /// nothing highlighted), but leaving it stale is a needless UX papercut
+    /// `cycle()` would otherwise only fix on the *next* keypress.
+    fn ensure_selection_valid(&mut self) {
+        let len = self.visible_ids().len();
+        let still_valid = matches!(self.list_state.selected(), Some(i) if i < len);
+        if !still_valid {
+            self.list_state.select(if len > 0 { Some(0) } else { None });
+        }
+    }
+
+    pub fn toggle_live_only(&mut self) {
+        self.live_only = !self.live_only;
+        self.ensure_selection_valid();
+    }
+
+    pub fn set_live(&mut self, entries: Vec<LiveEntry>) {
+        self.live_ids = entries.into_iter().map(|e| e.vtuber.id).collect();
+        if self.live_only {
+            self.ensure_selection_valid();
+        }
     }
 
     pub fn go_back_to_list(&mut self) {
@@ -243,11 +299,13 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        cycle(&mut self.list_state, self.items.len(), true);
+        let len = self.visible_ids().len();
+        cycle(&mut self.list_state, len, true);
     }
 
     pub fn previous(&mut self) {
-        cycle(&mut self.list_state, self.items.len(), false);
+        let len = self.visible_ids().len();
+        cycle(&mut self.list_state, len, false);
     }
 }
 

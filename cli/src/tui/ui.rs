@@ -28,6 +28,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
             LoadState::Loaded if app.items.is_empty() => {
                 draw_message(frame, chunks[0], "No VTubers tracked yet.")
             }
+            LoadState::Loaded if app.live_only && app.visible_ids().is_empty() => {
+                draw_message(frame, chunks[0], "No one is live right now.")
+            }
             LoadState::Loaded => draw_list(frame, chunks[0], app),
         }
     }
@@ -50,25 +53,34 @@ fn draw_message(frame: &mut Frame, area: Rect, msg: &str) {
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = app
-        .items
+    let visible = app.visible_ids();
+    let items: Vec<ListItem> = visible
         .iter()
-        .map(|v| {
-            let line = Line::from(vec![
+        .map(|&i| {
+            let v = &app.items[i];
+            let mut spans = vec![
                 Span::styled(v.name.clone(), theme::name()),
                 Span::raw("  "),
                 Span::styled(format!("[{}]", v.platform), theme::muted()),
-            ]);
-            ListItem::new(line)
+            ];
+            // Badge, not a filter — shown regardless of live_only, since
+            // every row is already live when that's on anyway.
+            if app.live_ids.contains(&v.id) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled("LIVE", theme::live_status(true)));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
+    let title = if app.live_only {
+        format!(" Tracked VTubers — live only ({}) ", visible.len())
+    } else {
+        format!(" Tracked VTubers ({}) ", app.items.len())
+    };
+
     let list = List::new(items)
-        .block(
-            Block::default()
-                .title(format!(" Tracked VTubers ({}) ", app.items.len()))
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title(title).borders(Borders::ALL))
         .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED))
         .highlight_symbol("> ");
 
@@ -89,7 +101,10 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let hints = match app.screen {
-        Screen::List => "j/k move  ·  Enter detail  ·  o open  ·  ? help  ·  q quit",
+        Screen::List if app.live_only => {
+            "j/k move  ·  Enter detail  ·  o open  ·  L show all  ·  ? help  ·  q quit"
+        }
+        Screen::List => "j/k move  ·  Enter detail  ·  o open  ·  L live only  ·  ? help  ·  q quit",
         Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
         Screen::Help => "Esc/h close",
     };
@@ -263,8 +278,8 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::raw(""),
         Line::styled("j/k, ↑/↓  move          Enter  open detail", theme::muted()),
         Line::styled("o         open browser  Tab    switch pane (in detail)", theme::muted()),
-        Line::styled("q         quit          ?      toggle this help", theme::muted()),
-        Line::styled("Esc/h     close/back", theme::muted()),
+        Line::styled("L         live only      ?      toggle this help", theme::muted()),
+        Line::styled("q         quit           Esc/h  close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);

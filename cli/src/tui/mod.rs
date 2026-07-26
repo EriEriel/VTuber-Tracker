@@ -16,18 +16,18 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use tokio::sync::mpsc;
 
-use crate::routes::{ApiError, VtuberDetail};
+use crate::routes::{ApiError, LiveEntry, VtuberDetail};
 
 /// What can arrive asynchronously and needs to update `App`. Grows with each
-/// later phase (an action's outcome, an auto-refresh tick) — Phase 2 adds
-/// the detail fetch and the one action (`o`) that can fail in a way with no
-/// screen of its own to show it.
+/// later phase (an auto-refresh tick) — Phase 3 adds the live-vtubers fetch,
+/// dispatched alongside the list fetch at startup.
 enum Message {
     Vtubers(Result<Vec<VtuberRow>, ApiError>),
     Detail {
         id: String,
         result: Result<VtuberDetail, ApiError>,
     },
+    Live(Result<Vec<LiveEntry>, ApiError>),
     ActionFailed(String),
 }
 
@@ -45,6 +45,7 @@ pub async fn run() -> anyhow::Result<()> {
     // already resolved. Spawning it means the first frame(s) can genuinely
     // show "Loading..." while it's in flight.
     spawn_fetch_vtubers(tx.clone());
+    spawn_fetch_live(tx.clone());
 
     let result = run_loop(&mut terminal, &mut app, tx, rx).await;
 
@@ -56,6 +57,19 @@ pub async fn run() -> anyhow::Result<()> {
 fn spawn_fetch_vtubers(tx: mpsc::Sender<Message>) {
     tokio::spawn(async move {
         let _ = tx.send(Message::Vtubers(fetch_tracked_vtubers().await)).await;
+    });
+}
+
+fn spawn_fetch_live(tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        // Dedup here, not in App: `watch::dedupe_one_per_vtuber` is the
+        // already-tested rule for collapsing a VTuber's stray duplicate live
+        // docs (belt-and-braces — the backend shouldn't produce them, see
+        // watch.rs) into one, reused verbatim rather than reimplemented.
+        let result = crate::routes::fetch_live_vtubers()
+            .await
+            .map(|entries| crate::watch::dedupe_one_per_vtuber(&entries));
+        let _ = tx.send(Message::Live(result)).await;
     });
 }
 
@@ -147,6 +161,8 @@ fn handle_message(app: &mut App, message: Message) {
         Message::Vtubers(Ok(rows)) => app.set_items(rows),
         Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
         Message::Detail { id, result } => app.accept_detail(&id, result),
+        Message::Live(Ok(entries)) => app.set_live(entries),
+        Message::Live(Err(e)) => app.last_error = Some(e.to_string()),
         Message::ActionFailed(msg) => app.last_error = Some(msg),
     }
 }

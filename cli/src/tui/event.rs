@@ -44,6 +44,7 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Char('?') if app.screen != Screen::Detail => app.toggle_help(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::List => app.next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::List => app.previous(),
+        KeyCode::Char('L') if app.screen == Screen::List => app.toggle_live_only(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
         KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),

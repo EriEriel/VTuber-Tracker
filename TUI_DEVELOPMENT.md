@@ -1,6 +1,6 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–2 implemented**, Phases 3–7 planned, Phase 8 deferred.
+Status: **Phases 0–3 implemented**, Phases 4–7 planned, Phase 8 deferred.
 Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -311,14 +311,39 @@ instead of erroring; `Esc` returns; display stays clean.
 
 # Phase 3 — Live
 
-Maps `live`.
+Maps `live`. **Done**, reviewed by running.
 
-- [ ] Live badge on list rows, using `tui/theme.rs`'s green
-- [ ] `L` toggles a live-only view
-- [ ] Reuse `fetch_live_vtubers` and `watch::dedupe_one_per_vtuber` rather than
-      reimplementing dedup
+- [x] Live badge on list rows, using `tui/theme.rs`'s green (`live_status`,
+      already added in Phase 2 for Detail's status line and now reused here
+      rather than adding a second function for the same colour)
+- [x] `L` toggles a live-only view
+- [x] Reuse `fetch_live_vtubers` and `watch::dedupe_one_per_vtuber` rather than
+      reimplementing dedup — the spawned fetch pipes straight through
+      `dedupe_one_per_vtuber` before anything reaches `App`
 
-**Review:** badges match `oshihub live`; `L` filters and toggles back.
+`fetch_live_vtubers` is dispatched as its own background task at startup,
+alongside the vtubers fetch, into a new `Message::Live` variant. Selection
+handling turned out to be the real substance of this phase: rather than
+filtering `app.items` into a second copy when `L` is on, `App::visible_ids()`
+is now the single source of truth for "which indices are navigable/rendered
+right now," and `list_state`'s selected index is always a position *into
+that*, not into `items` directly. `next`/`previous`/`selected`/`draw_list`
+all go through it, so toggling the filter can't desync what's stored from
+what's shown. `ensure_selection_valid` snaps the selection back into range
+when the visible set shrinks out from under it (toggling `L`, or the live set
+itself updating after the fact) — not strictly required for safety (an
+out-of-range index just renders nothing highlighted, `cycle()` self-heals it
+on the next keypress), but avoids a needless dead-cursor moment.
+
+This indirection is deliberately reusable: Phase 4's incremental search
+filter needs the same shape (a shrinking visible set, a selection that has to
+stay valid across it), so `/` should widen `visible_ids`'s predicate rather
+than invent a parallel mechanism.
+
+**Review:** badges match `oshihub live`; `L` filters and toggles back;
+selection stays valid (never on a hidden row) across both toggles; an empty
+live set shows "No one is live right now." instead of an empty list; `j`/`k`/
+`Enter`/`o` all operate on the visible (filtered) set while `L` is active.
 
 ---
 
