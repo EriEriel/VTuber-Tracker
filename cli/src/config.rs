@@ -12,6 +12,16 @@ use std::sync::OnceLock;
 const DEFAULT_API_URL: &str = "http://localhost:3000";
 const ENV_API_URL: &str = "OSHIHUB_API_URL";
 const ENV_API_TOKEN: &str = "OSHIHUB_API_TOKEN";
+const ENV_WATCH_INTERVAL: &str = "OSHIHUB_WATCH_INTERVAL";
+
+/// Default gap between `oshihub watch` polls.
+pub const DEFAULT_WATCH_INTERVAL_SECS: u64 = 60;
+/// Floor on the poll interval. The backend detects a YouTube go-live on a
+/// 5-minute cycle, so polling faster than this buys nothing and just adds
+/// load — the limit is upstream, not here.
+pub const MIN_WATCH_INTERVAL_SECS: u64 = 15;
+/// mako's default-timeout is 5s, too short for "you weren't at your desk".
+pub const DEFAULT_NOTIFY_TIMEOUT_MS: u64 = 10_000;
 
 // Only the fields we actually read. Every key is optional so a config file
 // that sets one setting doesn't have to spell out the rest.
@@ -19,6 +29,9 @@ const ENV_API_TOKEN: &str = "OSHIHUB_API_TOKEN";
 struct FileConfig {
     api_url: Option<String>,
     api_token: Option<String>,
+    watch_interval_secs: Option<u64>,
+    notify_icons: Option<bool>,
+    notify_timeout_ms: Option<u64>,
 }
 
 // Where the resolved value came from — worth tracking so `oshihub config`
@@ -37,6 +50,13 @@ pub struct Config {
     /// backend is unauthenticated (i.e. a local one with no API_TOKEN set).
     pub api_token: Option<String>,
     pub token_source: Option<ConfigSource>,
+    /// `oshihub watch` poll gap. A `--interval` flag overrides this.
+    pub watch_interval_secs: u64,
+    /// Whether `oshihub watch` caches VTuber avatars to use as notification
+    /// icons. Opting out keeps the CLI from writing to disk at all.
+    pub notify_icons: bool,
+    /// How long a notification stays on screen. 0 means "until dismissed".
+    pub notify_timeout_ms: u64,
 }
 
 /// `~/.config/oshihub/config.toml` on Linux (respects `XDG_CONFIG_HOME`);
@@ -58,6 +78,18 @@ fn env_value(key: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// Poll interval from the config sources, floored.
+///
+/// Split out and pure so the precedence chain and the clamp are testable
+/// without touching the environment or the filesystem — `Config::load()`
+/// itself isn't testable for exactly that reason. `--interval` is applied on
+/// top of this by `watch`, since a flag beats any stored setting.
+pub fn resolve_interval(env: Option<u64>, file: Option<u64>) -> u64 {
+    env.or(file)
+        .unwrap_or(DEFAULT_WATCH_INTERVAL_SECS)
+        .max(MIN_WATCH_INTERVAL_SECS)
 }
 
 // Warns rather than returning an error: a typo'd config file shouldn't make
@@ -101,11 +133,25 @@ impl Config {
             },
         };
 
+        let watch_interval_secs = resolve_interval(
+            env_value(ENV_WATCH_INTERVAL).and_then(|v| v.parse().ok()),
+            file.as_ref().and_then(|(cfg, _)| cfg.watch_interval_secs),
+        );
+
         Config {
             api_url,
             source,
             api_token,
             token_source,
+            watch_interval_secs,
+            notify_icons: file
+                .as_ref()
+                .and_then(|(cfg, _)| cfg.notify_icons)
+                .unwrap_or(true),
+            notify_timeout_ms: file
+                .as_ref()
+                .and_then(|(cfg, _)| cfg.notify_timeout_ms)
+                .unwrap_or(DEFAULT_NOTIFY_TIMEOUT_MS),
         }
     }
 }
@@ -193,5 +239,47 @@ mod tests {
     fn parses_config_file_without_api_url() {
         let parsed: FileConfig = toml::from_str("").unwrap();
         assert_eq!(parsed.api_url, None);
+    }
+
+    #[test]
+    fn parses_watch_config_keys() {
+        let parsed: FileConfig = toml::from_str(
+            r#"
+            api_url = "http://vps.example.com:3000"
+            watch_interval_secs = 120
+            notify_icons = false
+            notify_timeout_ms = 0
+        "#,
+        )
+        .unwrap();
+        assert_eq!(parsed.watch_interval_secs, Some(120));
+        assert_eq!(parsed.notify_icons, Some(false));
+        assert_eq!(parsed.notify_timeout_ms, Some(0));
+    }
+
+    // A config written before these keys existed must still parse — the
+    // watch settings just fall back to their defaults.
+    #[test]
+    fn watch_config_keys_are_optional() {
+        let parsed: FileConfig = toml::from_str(r#"api_url = "http://localhost:3000""#).unwrap();
+        assert_eq!(parsed.watch_interval_secs, None);
+        assert_eq!(parsed.notify_icons, None);
+        assert_eq!(parsed.notify_timeout_ms, None);
+    }
+
+    #[test]
+    fn interval_resolves_env_over_file_over_default() {
+        assert_eq!(resolve_interval(Some(90), Some(120)), 90);
+        assert_eq!(resolve_interval(None, Some(120)), 120);
+        assert_eq!(resolve_interval(None, None), DEFAULT_WATCH_INTERVAL_SECS);
+    }
+
+    // Polling faster than the floor buys nothing — the backend only detects
+    // a YouTube go-live every 5 minutes — so an over-eager value is clamped
+    // rather than honoured.
+    #[test]
+    fn interval_is_clamped_to_the_floor() {
+        assert_eq!(resolve_interval(Some(1), None), MIN_WATCH_INTERVAL_SECS);
+        assert_eq!(resolve_interval(None, Some(0)), MIN_WATCH_INTERVAL_SECS);
     }
 }

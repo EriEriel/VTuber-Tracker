@@ -1,7 +1,9 @@
 mod config;
 mod models;
+mod notify;
 mod routes;
 mod theme;
+mod watch;
 
 use clap::{Parser, Subcommand};
 use crossterm::execute;
@@ -70,6 +72,17 @@ enum Commands {
     /// List VTubers who are currently live
     #[command(alias = "lv")]
     Live,
+    /// Watch for VTubers going live and send desktop notifications
+    #[command(alias = "w")]
+    Watch {
+        /// Seconds between polls (floor 15; overrides the config file)
+        #[arg(long)]
+        interval: Option<u64>,
+        /// Notify for VTubers already live at startup instead of treating
+        /// them as the quiet baseline
+        #[arg(long)]
+        notify_existing: bool,
+    },
     /// Show the resolved backend URL and where it came from
     Config,
 }
@@ -223,6 +236,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  {}", theme::url(&entry.stream.url));
                 println!();
             }
+        }
+        Commands::Watch {
+            interval,
+            notify_existing,
+        } => {
+            watch::run(watch::WatchOptions {
+                interval_secs: interval,
+                notify_existing,
+            })
+            .await?;
         }
         Commands::Config => {
             let cfg = config::config();

@@ -4,24 +4,83 @@ use crate::config::api_url;
 use crate::models::{Platform, VtuberChannel,Source};
 use serde::{Deserialize, Serialize};
 
+// A typed error, rather than the `Box<dyn Error>` built from a string that
+// every other path here uses.
+//
+// `oshihub watch` runs for hours and has to treat failures differently: a
+// dropped connection is transient and should be retried, but a 401 is fatal
+// (no amount of retrying fixes a bad token, and a watcher silently 401ing
+// forever while you believe you're covered is the worst possible state).
+// Distinguishing those by matching on a variant beats substring-matching an
+// error message.
+//
+// Existing `Box<dyn Error>` call sites are unaffected — `?` still converts
+// via the blanket `From<E: Error>` impl.
+#[derive(Debug)]
+pub enum ApiError {
+    Unauthorized,
+    Http {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    Transport(reqwest::Error),
+    Decode(serde_json::Error),
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::Unauthorized => write!(
+                f,
+                "backend rejected the request (401 Unauthorized) — check the auth token with `oshihub config`"
+            ),
+            ApiError::Http { status, body } => write!(f, "backend returned {status}: {body}"),
+            // `{err}` not `{err:?}`: reqwest's Debug is a multi-line dump of
+            // the whole request context, which is what made an unreachable
+            // backend look like a crash rather than "couldn't connect".
+            ApiError::Transport(err) => write!(f, "could not reach the backend: {err}"),
+            ApiError::Decode(err) => write!(f, "could not parse the backend's response: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ApiError::Transport(err) => Some(err),
+            ApiError::Decode(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<reqwest::Error> for ApiError {
+    fn from(err: reqwest::Error) -> Self {
+        ApiError::Transport(err)
+    }
+}
+
+impl From<serde_json::Error> for ApiError {
+    fn from(err: serde_json::Error) -> Self {
+        ApiError::Decode(err)
+    }
+}
+
 // Reads a response body, turning a non-2xx status into a readable error.
 //
 // Without this the error-shaped JSON body of a failure ({"error": "..."})
 // gets handed straight to serde, which fails with something like
 // `invalid type: map, expected a sequence` — technically true and completely
 // unhelpful for the actual problem, which is usually a missing token.
-async fn read_body(res: reqwest::Response) -> Result<String, Box<dyn std::error::Error>> {
+async fn read_body(res: reqwest::Response) -> Result<String, ApiError> {
     let status = res.status();
     let body = res.text().await?;
 
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(
-            "backend rejected the request (401 Unauthorized) — check the auth token with `oshihub config`"
-                .into(),
-        );
+        return Err(ApiError::Unauthorized);
     }
     if !status.is_success() {
-        return Err(format!("backend returned {status}: {body}").into());
+        return Err(ApiError::Http { status, body });
     }
 
     Ok(body)
@@ -229,22 +288,33 @@ pub async fn print_stream_thumbnail(url: &str, width: u32) -> Result<(u32, u32),
     Ok(viuer::print(&img, &conf)?)
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveStreamInfo {
     pub title: String,
     pub url: String,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
+    /// Stable per-stream identity, used by `oshihub watch` to tell one stream
+    /// from the next. `Option` deliberately: a CLI updated before the backend
+    /// is redeployed won't see this field, and degrading to a coarser key is
+    /// better than failing to deserialize.
+    #[serde(default)]
+    pub external_id: Option<String>,
+    /// Only used to order duplicate live docs deterministically. Left as a
+    /// String — nothing here parses dates, and pulling in a date crate to
+    /// render "live for 1h23m" isn't worth it yet.
+    #[serde(default)]
+    pub start_time: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LiveEntry {
     pub vtuber: VtuberChannel,
     pub stream: LiveStreamInfo,
 }
 
-pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, Box<dyn std::error::Error>> {
+pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers/live", api_url()))
@@ -373,5 +443,52 @@ mod tests {
     #[test]
     fn rejects_unsupported_platform() {
         assert!(parse_channel_url("https://example.com/foo").is_err());
+    }
+
+    // Real captured `GET /api/vtubers/live` entry (Tawffie, live 2026-07-26).
+    const LIVE_ENTRY_TWITCH: &str = r#"{"vtuber":{"_id":"6a65488f723226c982581293","name":"Tawffie","englishName":"Tawffie","photo":"https://static-cdn.jtvnw.net/jtv_user_pictures/30e185a0-profile_image-300x300.png","platform":"twitch","source":"twitch_api","platformChannelId":"118858663","isTracked":true,"lastSyncedAt":"2026-07-26T03:09:20.372Z","lastLiveSyncedAt":"2026-07-26T03:09:20.372Z","lastStatsSyncedAt":"2026-07-26T03:09:20.372Z","createdAt":"2026-07-25T23:36:47.273Z","updatedAt":"2026-07-26T03:09:41.433Z","__v":0},"stream":{"externalId":"317728559192","title":"First Playthrough.. Hay-deez...nuts? !throne !clip","url":"https://www.twitch.tv/tawffie","thumbnailUrl":"https://static-cdn.jtvnw.net/previews-ttv/live_user_tawffie-640x360.jpg","startTime":"2026-07-26T03:09:00.000Z"}}"#;
+
+    // Same shape for a Holodex-sourced YouTube VTuber: the stream URL carries
+    // the video id, unlike Twitch's.
+    const LIVE_ENTRY_YOUTUBE: &str = r#"{"vtuber":{"_id":"6a64b8bb723226c982580e29","name":"Nimi Nightmare","englishName":"Nimi Nightmare","photo":"https://yt3.ggpht.com/nimi=s800-c-k-c0x00ffffff-no-rj","platform":"youtube","source":"holodex","platformChannelId":"UCIfAvpeIWGHb0duCkMkmm2Q","isTracked":true,"lastSyncedAt":"2026-07-26T03:09:20.372Z","lastLiveSyncedAt":"2026-07-26T03:09:20.372Z","lastStatsSyncedAt":"2026-07-26T03:09:20.372Z","createdAt":"2026-07-25T23:36:47.273Z","updatedAt":"2026-07-26T03:09:41.433Z","__v":0},"stream":{"externalId":"0iTYVln-O1Q","title":"karaoke stream","url":"https://www.youtube.com/watch?v=0iTYVln-O1Q","thumbnailUrl":"https://i.ytimg.com/vi/0iTYVln-O1Q/hqdefault.jpg","startTime":"2026-07-26T01:00:00.000Z"}}"#;
+
+    // A backend predating the externalId addition. The CLI can be updated
+    // before the VPS is redeployed, so this has to deserialize rather than
+    // fail — `watch` falls back to a coarser dedup key.
+    const LIVE_ENTRY_NO_EXTERNAL_ID: &str = r#"{"vtuber":{"_id":"6a65488f723226c982581293","name":"Tawffie","englishName":"Tawffie","photo":"","platform":"twitch","source":"twitch_api","platformChannelId":"118858663","isTracked":true,"lastSyncedAt":null,"lastLiveSyncedAt":null,"lastStatsSyncedAt":null,"createdAt":"2026-07-25T23:36:47.273Z","updatedAt":"2026-07-26T03:09:41.433Z","__v":0},"stream":{"title":"old backend","url":"https://www.twitch.tv/tawffie","thumbnailUrl":null}}"#;
+
+    #[test]
+    fn deserializes_twitch_live_entry() {
+        let entry: LiveEntry = serde_json::from_str(LIVE_ENTRY_TWITCH).unwrap();
+        assert_eq!(entry.vtuber.english_name, "Tawffie");
+        assert_eq!(entry.stream.external_id.as_deref(), Some("317728559192"));
+        // Regression guard: startTime is sent by the backend and was silently
+        // dropped before this field existed.
+        assert_eq!(
+            entry.stream.start_time.as_deref(),
+            Some("2026-07-26T03:09:00.000Z")
+        );
+    }
+
+    #[test]
+    fn deserializes_youtube_live_entry() {
+        let entry: LiveEntry = serde_json::from_str(LIVE_ENTRY_YOUTUBE).unwrap();
+        assert_eq!(entry.vtuber.platform, Platform::Youtube);
+        assert_eq!(entry.stream.external_id.as_deref(), Some("0iTYVln-O1Q"));
+    }
+
+    #[test]
+    fn deserializes_live_entry_without_external_id() {
+        let entry: LiveEntry = serde_json::from_str(LIVE_ENTRY_NO_EXTERNAL_ID).unwrap();
+        assert_eq!(entry.stream.external_id, None);
+        assert_eq!(entry.stream.start_time, None);
+        assert_eq!(entry.stream.thumbnail_url, None);
+    }
+
+    #[test]
+    fn deserializes_live_array_response() {
+        let body = format!("[{LIVE_ENTRY_TWITCH},{LIVE_ENTRY_YOUTUBE}]");
+        let entries: Vec<LiveEntry> = serde_json::from_str(&body).unwrap();
+        assert_eq!(entries.len(), 2);
     }
 }
