@@ -1,6 +1,6 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–5 implemented**, Phases 6–7 planned, Phase 8 deferred.
+Status: **Phases 0–6 implemented**, Phase 7 planned, Phase 8 deferred.
 Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -442,18 +442,39 @@ throughout each action.
 
 # Phase 6 — Edit
 
-Closes the "No `update` CLI command" entry under CLAUDE.md's Known gaps.
+Closed the "No `update` CLI command" entry under CLAUDE.md's Known gaps.
+**Done**, reviewed by running.
 
-- [ ] `e` → prefilled form modal over `name`, `englishName`, `photo`,
+- [x] `e` → prefilled form modal over `name`, `englishName`, `photo`,
       `isTracked`, `org`, `suborg` (all optional; `photo` must be a valid URL)
-- [ ] New `routes::update_vtuber_channel`
-- [ ] Remove the Known-gaps line from `CLAUDE.md` once this lands
+- [x] New `routes::update_vtuber_channel`
+- [x] Removed the Known-gaps line from `CLAUDE.md`
 
 `isTracked` as a toggle is the most useful field here — it is what the list
-filters on.
+filters on. Toggling it off and saving relies on the same refresh-on-success
+plumbing Phase 5 built (re-fetching the tracked list, already filtered on
+`isTracked` both server- and client-side), so "leaves the list" needed no
+special-case code.
+
+Prefilling costs no extra fetch: the list's own load already returns full
+`VtuberChannel`s, so `VtuberRow` just needed to stop discarding
+`englishName`/native `name`/`photo`/`isTracked` on the way to the display
+view (it only kept the already-collapsed display `name` before). Photo is
+validated as a URL *before* dispatching anything, same rule as `a`'s create
+flow — via `reqwest::Url::parse` (a re-export already available transitively
+through `reqwest`), not a new dependency for one check.
+
+The one genuinely tricky key: `Space` means two different things depending
+on which field has focus — toggle `isTracked` there, or insert a literal
+space everywhere else (org names like "Hololive EN" routinely have one).
+`edit_toggle_tracked` only acts when `IsTracked` is focused, so `Space`
+falls through to normal text input everywhere else without `event.rs`
+needing to special-case anything.
 
 **Review:** rename a VTuber and see it persist; toggle `isTracked` off and
-watch it leave the list.
+watch it leave the list; an invalid photo URL shows inline and blocks
+submission; `Tab`/`Shift+Tab`/`↑`/`↓` all cycle fields; typing a space into
+org/suborg works normally.
 
 ---
 

@@ -1,6 +1,6 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use super::app::{App, ModalKind, Screen};
+use super::app::{App, EditField, EditPayload, ModalKind, Screen};
 use crate::models::Source;
 
 /// Background work an event decided to kick off. `handle_event` only
@@ -21,6 +21,10 @@ pub enum Command {
     /// re-parses it (it's the only thing that knows how to build the
     /// request body), but a guaranteed-bad URL never reaches here.
     Create(String),
+    /// Already validated by `App::try_submit_edit` — plain data, not a
+    /// `routes::UpdateFields`, so this module stays routes-agnostic; `mod.rs`
+    /// does the conversion when it actually dispatches.
+    Update(EditPayload),
 }
 
 /// Applies one already-read crossterm `Event` to `App`, returning a
@@ -84,6 +88,7 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
             app.open_confirm_delete();
         }
         KeyCode::Char('a') if app.screen == Screen::List => app.open_create_url(),
+        KeyCode::Char('e') if app.screen == Screen::List => app.open_edit_form(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
         KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
@@ -167,5 +172,46 @@ fn handle_modal(app: &mut App, kind: ModalKind, code: KeyCode) -> Option<Command
             }
             _ => None,
         },
+        ModalKind::Edit => handle_edit_form(app, code),
+    }
+}
+
+/// `Tab`/`Down` and `BackTab`/`Up` both cycle fields — the second pair
+/// matches how a traditional form usually behaves, on top of the
+/// `Tab`-cycles-panes convention Detail already established. `Space` is
+/// scoped to only the `IsTracked` field; everywhere else it has to insert a
+/// literal space (`edit_push` handles that already), since org/suborg names
+/// routinely contain one.
+fn handle_edit_form(app: &mut App, code: KeyCode) -> Option<Command> {
+    let focus = app.edit.as_ref().map(|f| f.focus);
+
+    match code {
+        KeyCode::Tab | KeyCode::Down => {
+            app.edit_next_field();
+            None
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            app.edit_previous_field();
+            None
+        }
+        KeyCode::Char(' ') if focus == Some(EditField::IsTracked) => {
+            app.edit_toggle_tracked();
+            None
+        }
+        KeyCode::Char(c) => {
+            app.edit_push(c);
+            None
+        }
+        KeyCode::Backspace => {
+            app.edit_backspace();
+            None
+        }
+        KeyCode::Enter => app.try_submit_edit().map(Command::Update),
+        KeyCode::Esc => {
+            app.edit = None;
+            app.go_back_to_list();
+            None
+        }
+        _ => None,
     }
 }

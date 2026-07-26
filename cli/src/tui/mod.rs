@@ -193,6 +193,23 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
                 let _ = tx.send(Message::ActionDone(result)).await;
             });
         }
+        Command::Update(payload) => {
+            tokio::spawn(async move {
+                let fields = crate::routes::UpdateFields {
+                    name: payload.name,
+                    english_name: payload.english_name,
+                    photo: payload.photo,
+                    org: payload.org,
+                    suborg: payload.suborg,
+                    is_tracked: payload.is_tracked,
+                };
+                let result = crate::routes::update_vtuber_channel(&payload.id, fields)
+                    .await
+                    .map(|()| format!("Updated {}", payload.display_name))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Message::ActionDone(result)).await;
+            });
+        }
     }
 }
 

@@ -155,6 +155,62 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Loose syntax check, not a guarantee the URL resolves to anything —
+/// `reqwest::Url` (a re-export of the `url` crate, already a transitive
+/// dependency via `reqwest`) is enough for "does this look like a URL"
+/// without adding a new direct dependency for one check.
+pub(crate) fn is_valid_url(s: &str) -> bool {
+    reqwest::Url::parse(s).is_ok()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateVtuberChannelBody {
+    name: String,
+    english_name: String,
+    photo: String,
+    is_tracked: bool,
+    org: Option<String>,
+    suborg: Option<String>,
+}
+
+/// Plain data the TUI's edit form collects — kept separate from the
+/// serialized wire body so this stays a stable shape callers build even if
+/// the request's JSON casing/shape changes later.
+pub struct UpdateFields {
+    pub name: String,
+    pub english_name: String,
+    pub photo: String,
+    /// Empty string means "no org" and is sent as `null`, not `""` — the
+    /// backend already distinguishes an absent org from a set one (Twitch
+    /// channels never have one at all), so a real empty-string org would be
+    /// a third, meaningless state.
+    pub org: String,
+    pub suborg: String,
+    pub is_tracked: bool,
+}
+
+pub async fn update_vtuber_channel(id: &str, fields: UpdateFields) -> Result<(), ApiError> {
+    let body = UpdateVtuberChannelBody {
+        name: fields.name,
+        english_name: fields.english_name,
+        photo: fields.photo,
+        is_tracked: fields.is_tracked,
+        org: (!fields.org.is_empty()).then_some(fields.org),
+        suborg: (!fields.suborg.is_empty()).then_some(fields.suborg),
+    };
+
+    let client = crate::config::client();
+    let res = client
+        .put(format!("{}/api/vtubers/{id}", api_url()))
+        .json(&body)
+        .send()
+        .await?;
+
+    read_body(res).await?;
+    Ok(())
+}
+
 /// Deletes by id directly — the TUI already has the exact `VtuberChannel`
 /// selected, so it has no reason to go through a name lookup that could, in
 /// principle, match a different record than the one on screen.

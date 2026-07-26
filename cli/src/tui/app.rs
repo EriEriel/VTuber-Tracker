@@ -20,6 +20,14 @@ pub struct VtuberRow {
     /// Which upstream API to sync through — `s` needs this to pick the right
     /// `/api/sync/{path}` without a redundant name-based lookup.
     pub source: Source,
+    /// Raw fields `name` above already collapsed away (it's `english_name`
+    /// falling back to `native_name`) — `e`'s edit form needs both
+    /// separately to prefill correctly, plus `photo`/`is_tracked`, which
+    /// nothing before Phase 6 needed at all.
+    pub english_name: String,
+    pub native_name: String,
+    pub photo: String,
+    pub is_tracked: bool,
 }
 
 /// Takes `&VtuberChannel` rather than owning one: the caller already has a
@@ -49,6 +57,10 @@ impl From<&VtuberChannel> for VtuberRow {
             org: channel.org.clone(),
             suborg: channel.suborg.clone(),
             source: channel.source,
+            english_name: channel.english_name.clone(),
+            native_name: channel.name.clone(),
+            photo: channel.photo.clone(),
+            is_tracked: channel.is_tracked,
         }
     }
 }
@@ -88,6 +100,78 @@ pub enum Screen {
 pub enum ModalKind {
     ConfirmDelete,
     CreateUrl,
+    Edit,
+}
+
+/// Which field `e`'s edit form currently has keyboard focus. `Tab`/`Down`
+/// advances, `BackTab`/`Up` retreats; wraps both ways so cycling never dead-
+/// ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditField {
+    Name,
+    EnglishName,
+    Photo,
+    Org,
+    Suborg,
+    IsTracked,
+}
+
+impl EditField {
+    fn next(self) -> Self {
+        match self {
+            EditField::Name => EditField::EnglishName,
+            EditField::EnglishName => EditField::Photo,
+            EditField::Photo => EditField::Org,
+            EditField::Org => EditField::Suborg,
+            EditField::Suborg => EditField::IsTracked,
+            EditField::IsTracked => EditField::Name,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            EditField::Name => EditField::IsTracked,
+            EditField::EnglishName => EditField::Name,
+            EditField::Photo => EditField::EnglishName,
+            EditField::Org => EditField::Photo,
+            EditField::Suborg => EditField::Org,
+            EditField::IsTracked => EditField::Suborg,
+        }
+    }
+}
+
+/// `e`'s in-progress form, prefilled from the selected `VtuberRow` when
+/// opened. Bundled into its own struct rather than flat fields on `App`
+/// (unlike `create_input`) — six text fields plus a toggle, focus, and an
+/// error is too much to spread across the top-level struct.
+pub struct EditForm {
+    pub id: String,
+    /// The pre-edit display name, carried through for the "Updated X"
+    /// status message — not itself editable (`name`/`english_name` below
+    /// are the actual editable fields the message is derived from on submit).
+    pub display_name: String,
+    pub name: String,
+    pub english_name: String,
+    pub photo: String,
+    pub org: String,
+    pub suborg: String,
+    pub is_tracked: bool,
+    pub focus: EditField,
+    pub error: Option<String>,
+}
+
+/// What `App::try_submit_edit` hands back for `event.rs` to wrap into a
+/// `Command::Update` — plain data, not a `routes::UpdateFields`, so
+/// `event.rs` stays routes-agnostic like every other `Command` payload.
+pub struct EditPayload {
+    pub id: String,
+    pub display_name: String,
+    pub name: String,
+    pub english_name: String,
+    pub photo: String,
+    pub org: String,
+    pub suborg: String,
+    pub is_tracked: bool,
 }
 
 pub struct App {
@@ -138,6 +222,8 @@ pub struct App {
     /// per the same rule `create_vtuber_channel` already follows.
     pub create_input: String,
     pub create_error: Option<String>,
+    /// `e`'s in-progress form. `None` when the edit modal isn't open.
+    pub edit: Option<EditForm>,
     /// Outcome of the last background action — `o`'s open-in-browser, or
     /// Phase 5's `s`/`d`/`a` — shown in the status bar until the next action
     /// or screen change clears it. One field rather than a separate
@@ -187,6 +273,7 @@ impl App {
             filter_editing: false,
             create_input: String::new(),
             create_error: None,
+            edit: None,
             status: None,
             pending: 0,
             spinner_frame: 0,
@@ -338,6 +425,115 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Prefills straight from the selected `VtuberRow` — already holds
+    /// everything needed (Phase 6 is what `english_name`/`native_name`/
+    /// `photo`/`is_tracked` were added for), so opening the form costs no
+    /// extra fetch.
+    pub fn open_edit_form(&mut self) {
+        let Some(row) = self.selected() else { return };
+        let form = EditForm {
+            id: row.id.clone(),
+            display_name: row.name.clone(),
+            name: row.native_name.clone(),
+            english_name: row.english_name.clone(),
+            photo: row.photo.clone(),
+            org: row.org.clone().unwrap_or_default(),
+            suborg: row.suborg.clone().unwrap_or_default(),
+            is_tracked: row.is_tracked,
+            focus: EditField::Name,
+            error: None,
+        };
+        self.edit = Some(form);
+        self.status = None;
+        self.screen = Screen::Modal(ModalKind::Edit);
+    }
+
+    pub fn edit_next_field(&mut self) {
+        if let Some(form) = &mut self.edit {
+            form.focus = form.focus.next();
+        }
+    }
+
+    pub fn edit_previous_field(&mut self) {
+        if let Some(form) = &mut self.edit {
+            form.focus = form.focus.previous();
+        }
+    }
+
+    /// Only acts when `IsTracked` has focus — text fields need `Space` to
+    /// insert a literal space (org names like "Hololive EN" have one), so
+    /// this must never intercept it universally.
+    pub fn edit_toggle_tracked(&mut self) {
+        if let Some(form) = &mut self.edit
+            && form.focus == EditField::IsTracked
+        {
+            form.is_tracked = !form.is_tracked;
+        }
+    }
+
+    pub fn edit_push(&mut self, c: char) {
+        if let Some(form) = &mut self.edit {
+            match form.focus {
+                EditField::Name => form.name.push(c),
+                EditField::EnglishName => form.english_name.push(c),
+                EditField::Photo => form.photo.push(c),
+                EditField::Org => form.org.push(c),
+                EditField::Suborg => form.suborg.push(c),
+                EditField::IsTracked => {}
+            }
+            form.error = None;
+        }
+    }
+
+    pub fn edit_backspace(&mut self) {
+        if let Some(form) = &mut self.edit {
+            match form.focus {
+                EditField::Name => {
+                    form.name.pop();
+                }
+                EditField::EnglishName => {
+                    form.english_name.pop();
+                }
+                EditField::Photo => {
+                    form.photo.pop();
+                }
+                EditField::Org => {
+                    form.org.pop();
+                }
+                EditField::Suborg => {
+                    form.suborg.pop();
+                }
+                EditField::IsTracked => {}
+            }
+        }
+    }
+
+    /// Validates `photo` — the one field the backend actually rejects a bad
+    /// value for — *before* dispatching anything, same rule as
+    /// `try_submit_create`. `Some(payload)` on success (and closes the
+    /// modal); `None` leaves it open with `error` set to show inline.
+    pub fn try_submit_edit(&mut self) -> Option<EditPayload> {
+        let form = self.edit.as_mut()?;
+        if !form.photo.is_empty() && !crate::routes::is_valid_url(&form.photo) {
+            form.error = Some("Photo must be a valid URL".to_string());
+            return None;
+        }
+
+        let form = self.edit.take()?;
+        self.go_back_to_list();
+        self.begin_action();
+        Some(EditPayload {
+            id: form.id,
+            display_name: form.display_name,
+            name: form.name,
+            english_name: form.english_name,
+            photo: form.photo,
+            org: form.org,
+            suborg: form.suborg,
+            is_tracked: form.is_tracked,
+        })
     }
 
     /// Applies a detail fetch's result, unless it's for a VTuber the user

@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, DetailFocus, LoadState, ModalKind, Screen};
+use super::app::{App, DetailFocus, EditField, LoadState, ModalKind, Screen};
 use super::theme;
 use crate::routes::VtuberDetail;
 
@@ -74,6 +74,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Help => draw_help(frame, area, app),
         Screen::Modal(ModalKind::ConfirmDelete) => draw_confirm_delete(frame, area, app),
         Screen::Modal(ModalKind::CreateUrl) => draw_create_url(frame, area, app),
+        Screen::Modal(ModalKind::Edit) => draw_edit_form(frame, area, app),
         _ => {}
     }
 }
@@ -168,15 +169,16 @@ fn draw_hints_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.screen {
             Screen::List if app.live_only => {
-                "j/k move · Enter detail · o open · s sync · d delete · a add · / filter · L show all · ? help · q quit"
+                "j/k move · Enter detail · o open · s sync · d delete · a add · e edit · / filter · L show all · ? help · q quit"
             }
             Screen::List => {
-                "j/k move · Enter detail · o open · s sync · d delete · a add · / filter · L live only · ? help · q quit"
+                "j/k move · Enter detail · o open · s sync · d delete · a add · e edit · / filter · L live only · ? help · q quit"
             }
             Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
             Screen::Help => "Esc/h close",
             Screen::Modal(ModalKind::ConfirmDelete) => "y / Enter confirm  ·  n / Esc cancel",
             Screen::Modal(ModalKind::CreateUrl) => "Enter create  ·  Esc cancel",
+            Screen::Modal(ModalKind::Edit) => "Tab/↑↓ field · Space toggle · Enter save · Esc cancel",
         }
     };
     let p = Paragraph::new(hints).style(theme::muted());
@@ -351,8 +353,9 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::styled("o         open browser  Tab    switch pane (in detail)", theme::muted()),
         Line::styled("L         live only      /      filter by name", theme::muted()),
         Line::styled("s         sync selected  d      delete selected (confirms)", theme::muted()),
-        Line::styled("a         add from URL   q      quit", theme::muted()),
-        Line::styled("?         toggle this help  Esc/h  close/back", theme::muted()),
+        Line::styled("a         add from URL   e      edit selected", theme::muted()),
+        Line::styled("q         quit           ?      toggle this help", theme::muted()),
+        Line::styled("Esc/h     close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);
@@ -401,6 +404,50 @@ fn draw_create_url(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::default().title(" Add VTuber from URL ").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
+fn draw_edit_form(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(form) = &app.edit else { return };
+    let popup = centered_rect(60, 60, area);
+    frame.render_widget(Clear, popup);
+
+    let tracked_text = if form.is_tracked { "[x] tracked" } else { "[ ] tracked" };
+    let mut lines = vec![
+        edit_field_line("Name", &form.name, EditField::Name, form.focus),
+        edit_field_line("English name", &form.english_name, EditField::EnglishName, form.focus),
+        edit_field_line("Photo", &form.photo, EditField::Photo, form.focus),
+        edit_field_line("Org", &form.org, EditField::Org, form.focus),
+        edit_field_line("Suborg", &form.suborg, EditField::Suborg, form.focus),
+        edit_field_line("Tracked", tracked_text, EditField::IsTracked, form.focus),
+    ];
+
+    if let Some(err) = &form.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::raw(format!("Error: {err}")));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Tab/↑↓ field  ·  Space toggle (on Tracked)  ·  Enter save  ·  Esc cancel",
+        theme::muted(),
+    ));
+
+    let block = Block::default().title(" Edit VTuber ").borders(Borders::ALL);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
+/// The focused field gets a `>` marker and bold text; unfocused fields stay
+/// plain — same "only the active thing gets emphasis" convention as
+/// Detail's `focusable_list`.
+fn edit_field_line<'a>(label: &str, value: &'a str, field: EditField, focus: EditField) -> Line<'a> {
+    let focused = focus == field;
+    let marker = if focused { "> " } else { "  " };
+    let style = if focused { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
+    Line::from(vec![
+        Span::raw(marker),
+        Span::styled(format!("{label}: "), theme::muted()),
+        Span::styled(value, style),
+    ])
 }
 
 /// Standard ratatui popup pattern: carve a centred `percent_x` × `percent_y`
