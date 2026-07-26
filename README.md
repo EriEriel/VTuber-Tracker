@@ -84,14 +84,27 @@ oshihub lookup tawffie
 oshihub live
 ```
 
-### 4. Twitch live notifications (optional)
+### 4. Live detection (optional)
 
-Twitch VTubers can be updated in real time via EventSub over WebSocket, rather than waiting for the next sync. This needs a one-time interactive authorization, because **EventSub's WebSocket transport requires a user access token**, not the app token used everywhere else.
+Live status updates on its own, without waiting for a manual `sync`.
 
-1. In the [Twitch dev console](https://dev.twitch.tv/console), add `http://localhost:3000/auth/twitch/callback` as an OAuth Redirect URL on your application.
-2. With the backend running, visit http://localhost:3000/auth/twitch/login and approve.
+**Twitch** uses EventSub over **webhook** transport, which needs a publicly reachable HTTPS callback (port 443 — Twitch rejects anything else). Set both in `.env`:
 
-The token pair is stored in MongoDB (not `.env`) and refreshed automatically, so this is genuinely one-time. See [`TWITCH_EVENTSUB.md`](TWITCH_EVENTSUB.md) for the full design.
+```
+EVENTSUB_SECRET=...    # openssl rand -base64 32
+PUBLIC_URL=https://your-host.example.com
+```
+
+The backend reconciles its subscriptions on boot and Twitch then calls `POST /eventsub/callback`, which authenticates every request by HMAC signature. There's no interactive authorization step — subscription management uses the app token. Webhook transport also removed the old 5-VTuber ceiling that WebSocket transport imposed (`max_total_cost` 10 vs 10,000).
+
+**YouTube** has no push equivalent, so the backend polls every 5 minutes and derives go-live/went-offline edges by diffing. Optional knobs:
+
+```
+YOUTUBE_POLL_INTERVAL_MS=300000   # default 5 minutes
+YOUTUBE_POLL_DISABLED=true        # set on a second machine so it doesn't double-poll
+```
+
+Only run the poller in **one** place — both instances would spend YouTube quota against the same database. See [`LIVE_DETECTION.md`](LIVE_DETECTION.md) for the full design of both.
 
 ## CLI (`oshihub`)
 
@@ -102,6 +115,7 @@ The token pair is stored in MongoDB (not `.env`) and refreshed automatically, so
 | `list` | `l` | List all tracked VTubers |
 | `lookup <name>` | `lk` | Show a VTuber's live status, recent streams and clips, with thumbnails. `--limit <n>` caps how many of each (max 10) |
 | `live` | `lv` | Show everyone who's currently live |
+| `watch` | `w` | Keep running and fire a desktop notification whenever someone goes live. `--interval <secs>` sets the poll gap (floor 15), `--notify-existing` notifies for whoever is already live instead of treating them as the baseline |
 | `create <url>` | `c` | Register a VTuber from a channel URL. Parses platform (`youtube.com`/`youtu.be` → YouTube, `twitch.tv` → Twitch) and channel ID out of the URL |
 | `jump <name>` | `j` | Open a VTuber's channel in your browser |
 | `delete <name>` | `d` | Remove a VTuber and all their streams, clips, and stat snapshots |
@@ -120,6 +134,9 @@ Settings resolve **environment variable → config file → default**:
 |---|---|---|---|
 | Backend URL | `OSHIHUB_API_URL` | `api_url` | `http://localhost:3000` |
 | Auth token | `OSHIHUB_API_TOKEN` | `api_token` | none |
+| `watch` poll gap | `OSHIHUB_WATCH_INTERVAL` | `watch_interval_secs` | `60` (floor 15) |
+| Avatar icons on notifications | | `notify_icons` | `true` |
+| Notification timeout (ms) | | `notify_timeout_ms` | `10000` (`0` = until dismissed) |
 
 The config file lives at `~/.config/oshihub/config.toml` (respects `XDG_CONFIG_HOME`):
 
@@ -129,6 +146,43 @@ api_token = "your-shared-secret"
 ```
 
 `oshihub config` reports which source won — useful when a request unexpectedly 401s. Since each setting resolves independently, you can keep the URL in the file and the token in the environment.
+
+### Desktop notifications (`oshihub watch`)
+
+`oshihub watch` polls the backend and fires a desktop notification each time a tracked VTuber goes live, on either platform. Clicking the notification opens the stream.
+
+```sh
+oshihub watch                      # poll every 60s
+oshihub watch --interval 30
+oshihub watch --notify-existing    # also notify for whoever is already live
+```
+
+Whoever is live when it starts is treated as the quiet baseline and printed to the terminal rather than notified about — otherwise starting it would fire a burst of popups for streams you already knew about. `--notify-existing` opts out of that, which is also the easiest way to check notifications work without waiting for someone to go live.
+
+Requires `notify-send` (from `libnotify`) and a notification daemon. Without either, it degrades to terminal output and says so once rather than failing.
+
+Avatars are cached to `~/.cache/oshihub/avatars/` (the only thing the CLI ever writes to disk); set `notify_icons = false` to disable.
+
+**To have it start with your session**, create `~/.config/systemd/user/oshihub-watch.service`:
+
+```ini
+[Unit]
+Description=oshihub live VTuber notifications
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/oshihub watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+Then `systemctl --user daemon-reload && systemctl --user enable --now oshihub-watch`, and read its output with `journalctl --user -u oshihub-watch -f`.
+
+A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't loop on it. Note there's no locking: a terminal instance *and* an enabled service means two watchers and duplicate notifications.
 
 ### Stack
 

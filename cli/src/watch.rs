@@ -257,7 +257,7 @@ pub async fn run(opts: WatchOptions) -> Result<(), Box<dyn std::error::Error>> {
         state = next_state;
 
         for action in actions {
-            handle_action(action, &by_key, &notify_opts).await;
+            handle_action(action, &by_key, &notify_opts, cfg.notify_icons).await;
         }
 
         let delay = backoff_delay(failures, interval_secs);
@@ -289,6 +289,7 @@ async fn handle_action(
     action: Action,
     by_key: &HashMap<StreamKey, LiveEntry>,
     notify_opts: &notify::Options,
+    icons_enabled: bool,
 ) {
     match action {
         Action::Seeded(keys) => {
@@ -320,6 +321,11 @@ async fn handle_action(
                 crate::models::Platform::Youtube => "YouTube",
                 crate::models::Platform::Twitch => "Twitch",
             };
+            let icon = if icons_enabled {
+                notify::cached_icon(&entry.vtuber.photo).await
+            } else {
+                None
+            };
             notify::send(
                 notify::Content {
                     summary: format!("{} is live on {platform}", entry.vtuber.english_name),
@@ -328,7 +334,7 @@ async fn handle_action(
                     // as bold and the tags vanish.
                     body: notify::escape_markup(&entry.stream.title),
                     action_url: Some(entry.stream.url.clone()),
-                    icon_path: None,
+                    icon_path: icon,
                 },
                 notify_opts,
             )

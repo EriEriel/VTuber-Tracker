@@ -12,10 +12,16 @@
 // three of the details are load-bearing and non-obvious. See `build_args`.
 
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::theme;
+
+/// mako renders icons at max 32px. Caching at 64 covers a HiDPI rescale
+/// without storing 800px originals or making the daemon downscale on every
+/// notification.
+const ICON_SIZE: u32 = 64;
 
 /// What a single notification should say.
 pub struct Content {
@@ -107,6 +113,74 @@ pub fn build_args(content: &Content, opts: &Options) -> Vec<String> {
 
 /// Action id echoed back on stdout by `notify-send --wait` when clicked.
 pub const ACTION_ID: &str = "open";
+
+/// FNV-1a. Eight lines instead of a hashing crate, and `DefaultHasher` is
+/// explicitly documented as not stable across releases — which matters here,
+/// since the output becomes a filename that has to stay valid between runs.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Cache filename for an avatar.
+///
+/// Keyed on the photo URL rather than the VTuber id, so a changed photo
+/// yields a new filename and staleness self-corrects with no invalidation
+/// logic. Hashing also guarantees the result can't contain `/` or `..` and
+/// escape the cache directory.
+pub fn cache_filename(photo_url: &str) -> String {
+    format!("{:016x}.png", fnv1a(photo_url.as_bytes()))
+}
+
+fn cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|dir| dir.join("oshihub").join("avatars"))
+}
+
+/// Download, downscale and cache a VTuber avatar, returning a path suitable
+/// for `notify-send -i` (which takes a local path or themed name — it will
+/// not fetch an http URL).
+///
+/// Best-effort: every failure returns `None` and the notification simply
+/// goes out without an icon.
+pub async fn cached_icon(photo_url: &str) -> Option<String> {
+    if photo_url.is_empty() {
+        return None;
+    }
+
+    let dir = cache_dir()?;
+    let path = dir.join(cache_filename(photo_url));
+    if path.exists() {
+        return Some(path.to_string_lossy().into_owned());
+    }
+
+    // external_client() deliberately carries no bearer token — this is a
+    // third-party CDN, and the backend's shared secret has no business
+    // going there.
+    let res = crate::config::external_client()
+        .get(photo_url)
+        .send()
+        .await
+        .ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let bytes = res.bytes().await.ok()?;
+
+    // Re-encoding to PNG rather than storing the original also sidesteps
+    // gdk-pixbuf loader availability — ggpht serves WebP, and whether the
+    // daemon can decode that depends on an optional system package.
+    let image = image::load_from_memory(&bytes).ok()?;
+    let resized = image.thumbnail(ICON_SIZE, ICON_SIZE);
+
+    std::fs::create_dir_all(&dir).ok()?;
+    resized.save(&path).ok()?;
+
+    Some(path.to_string_lossy().into_owned())
+}
 
 /// Fire one notification. Returns `false` if it couldn't be delivered.
 ///
@@ -312,5 +386,23 @@ mod tests {
         let args = build_args(&content("x", "y"), &Options { timeout_ms: 0 });
         let pos = args.iter().position(|a| a == "-t").unwrap();
         assert_eq!(args[pos + 1], "0");
+    }
+
+    #[test]
+    fn cache_filename_is_stable_and_url_specific() {
+        let a = "https://cdn.example.com/pekora.png";
+        let b = "https://cdn.example.com/marine.png";
+        assert_eq!(cache_filename(a), cache_filename(a));
+        assert_ne!(cache_filename(a), cache_filename(b));
+    }
+
+    // The URL becomes a filename, so it must not be able to walk out of the
+    // cache directory.
+    #[test]
+    fn cache_filename_cannot_escape_the_directory() {
+        let nasty = cache_filename("https://x/../../../../etc/passwd");
+        assert!(!nasty.contains('/'));
+        assert!(!nasty.contains(".."));
+        assert!(nasty.ends_with(".png"));
     }
 }
