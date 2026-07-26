@@ -58,3 +58,13 @@ pub fn live_status(is_live: bool) -> Style {
         muted()
     }
 }
+
+/// The list's `LIVE` badge for a VTuber Phase 7's ticker just flagged as
+/// `WentLive`/`BurstWentLive` this poll, not merely still-live from before.
+/// Same green as `live_status`, plus `REVERSED` to stand out from every
+/// other already-live row without needing a second colour.
+pub fn just_went_live() -> Style {
+    Style::default()
+        .fg(Color::LightGreen)
+        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+}

@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::widgets::ListState;
 
 use crate::config::{self, ConfigSource};
 use crate::models::{Platform, Source, VtuberChannel};
 use crate::routes::{LiveEntry, VtuberDetail};
+use crate::watch::{self, WatchState};
 
 /// Minimal shape for what the list *and* detail screens need.
 /// Map existing API DTO into this at the boundary (same mapper-at-the-
@@ -203,6 +204,16 @@ pub struct App {
     /// Empty until that fetch resolves — badges just don't show yet, same as
     /// the rest of the list before its own fetch resolves.
     pub live_ids: HashSet<String>,
+    /// Ids that `watch::apply` flagged as `WentLive`/`BurstWentLive` on the
+    /// *most recent* successful poll only — replaced wholesale each poll,
+    /// not accumulated, so a highlight lasts exactly one `watch_interval_secs`
+    /// before fading back to the plain `LIVE` badge.
+    pub newly_live: HashSet<String>,
+    /// Feeds `watch::apply` (Phase 7's ticker) the same fold `oshihub watch`
+    /// itself uses, so "just went live" vs. "already live" comes from the
+    /// same tested edge-detection rather than a reimplementation. Private:
+    /// nothing outside `set_live` needs to touch the fold state directly.
+    watch_state: WatchState,
     /// `L`'s toggle. When set, `visible_ids` narrows to `live_ids` members —
     /// nothing else needs to know about the filter, since selection and
     /// rendering both already go through `visible_ids`.
@@ -268,6 +279,8 @@ impl App {
             stream_state: ListState::default(),
             clip_state: ListState::default(),
             live_ids: HashSet::new(),
+            newly_live: HashSet::new(),
+            watch_state: WatchState::Seeding,
             live_only: false,
             filter: String::new(),
             filter_editing: false,
@@ -345,8 +358,39 @@ impl App {
         self.ensure_selection_valid();
     }
 
+    /// Called on every successful live poll — the first one at startup and
+    /// every one Phase 7's ticker fires afterward. A failed poll never
+    /// reaches here at all (`handle_message` only calls this on `Ok`), which
+    /// is what gives "a failed poll changes nothing" for free without this
+    /// function needing to know about errors.
     pub fn set_live(&mut self, entries: Vec<LiveEntry>) {
-        self.live_ids = entries.into_iter().map(|e| e.vtuber.id).collect();
+        // Keyed the same way `watch::apply` internally keys its fold, so the
+        // `StreamKey`s that fold hands back for `WentLive`/`BurstWentLive`
+        // can be turned back into the vtuber ids `ui.rs` actually renders.
+        let vtuber_by_key: HashMap<watch::StreamKey, String> = entries
+            .iter()
+            .map(|e| (watch::stream_key(e), e.vtuber.id.clone()))
+            .collect();
+
+        self.live_ids = entries.iter().map(|e| e.vtuber.id.clone()).collect();
+
+        let state = std::mem::replace(&mut self.watch_state, WatchState::Seeding);
+        let (next_state, actions) = watch::apply(state, Ok(&entries));
+        self.watch_state = next_state;
+
+        // The very first poll's `Seeded` deliberately doesn't highlight —
+        // everything in it was already live before the TUI opened, same
+        // reason `oshihub watch` doesn't notify for it either.
+        self.newly_live = actions
+            .into_iter()
+            .flat_map(|action| match action {
+                watch::Action::WentLive(key) => vec![key],
+                watch::Action::BurstWentLive(keys) => keys,
+                watch::Action::Seeded(_) => Vec::new(),
+            })
+            .filter_map(|key| vtuber_by_key.get(&key).cloned())
+            .collect();
+
         if self.live_only {
             self.ensure_selection_valid();
         }

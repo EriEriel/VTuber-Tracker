@@ -2,7 +2,7 @@
 
 A polyglot project: a Hono/Bun REST API that aggregates VTuber data from HoloDex, YouTube, and Twitch into a unified MongoDB schema, plus `oshihub`, a Rust CLI client for it.
 
-Track the streamers you watch from one place in the terminal — list them, look up recent streams and clips with inline thumbnails, see who's live right now, and jump straight to a channel in your browser.
+Track the streamers you watch from one place in the terminal — list them, look up recent streams and clips with inline thumbnails, see who's live right now, and jump straight to a channel in your browser. One-shot subcommands or a full-screen [TUI](#tui-oshihub-tui) — same backend, either way.
 
 ```
 .
@@ -123,6 +123,7 @@ Reference docs: [`TWITCH_EVENTSUB.md`](TWITCH_EVENTSUB.md) and [`YOUTUBE_LIVE.md
 | `delete <name>` | `d` | Remove a VTuber and all their streams, clips, and stat snapshots |
 | `sync <name>` | `s` | Force a refresh from the source API, bypassing the staleness gates |
 | `config` | | Show the resolved backend URL and where it came from |
+| `tui` | | Full-screen terminal interface — see [TUI](#tui-oshihub-tui) below |
 
 Name arguments are partial and case-insensitive.
 
@@ -201,6 +202,27 @@ Then `systemctl --user daemon-reload && systemctl --user enable --now oshihub-wa
 `ExecStart` points at the *installed* binary, so re-run `cargo install --path cli` and `systemctl --user restart oshihub-watch` after changing the CLI — otherwise the service keeps running the old build.
 
 A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't loop on it. Note there's no locking: a terminal instance *and* an enabled service means two watchers and duplicate notifications.
+
+### TUI (`oshihub tui`)
+
+```sh
+oshihub tui
+```
+
+A full-screen `ratatui` interface over the same backend the one-shot commands use — **v0.1 complete**: main list, detail view (streams/clips), live badges that auto-refresh in place, incremental search/filter, and sync/delete/create/edit, all without leaving the terminal. It's a second front end alongside the one-shot commands above, not a replacement for them.
+
+```
+j / k / ↓ / ↑   move            Enter   detail view
+/               filter          o       open channel in browser / stream
+L               live-only       s       sync selected
+?               help overlay    d       delete selected (confirms)
+Esc / h         back            a       add from URL
+q               quit            e       edit selected
+```
+
+Live badges refresh on their own, on the same `watch_interval_secs` config `oshihub watch` uses — a VTuber going live mid-session picks up the badge within one interval, no restart or manual `s` needed, and briefly highlights to show it's new.
+
+Thumbnails aren't rendered inside the TUI yet — `viuer` writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame; see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md) for the full phase-by-phase design history and the trap notes. A dashboard/charts screen (Phase 8) is planned but deferred.
 
 ### Stack
 
@@ -295,14 +317,15 @@ CLI coverage of the backend:
 - [x] Read: list all VTubers via `list`
 - [x] Read: search by name, with streams/clips/live status via `lookup`
 - [x] Read: currently-live VTubers via `live`
-- [ ] Update — `PUT /api/vtubers/:id` exists on the backend, no CLI command calls it yet
+- [x] Update: `PUT /api/vtubers/:id` via the TUI's `e` edit modal (no one-shot `update` subcommand)
 - [x] Delete
 - [x] Force sync via `sync`
 - [x] Configurable backend URL and auth token
 - [x] Desktop notifications on going live via `watch`
+- [x] Full-screen TUI (`tui`) — v0.1 complete: list, detail, live, search/filter, create/sync/delete/edit, auto-refresh
 
 Known gaps:
 
-- No `update` command, despite `PUT /api/vtubers/:id` existing on the backend.
-- `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify.
-- A TUI dashboard is planned but not started.
+- No one-shot `update` subcommand — `PUT /api/vtubers/:id` is only reachable through the TUI.
+- `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify; same is true of two TUI sessions polling live status independently.
+- TUI thumbnails and a dashboard/charts screen (Phase 8) are planned but not started — see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md).

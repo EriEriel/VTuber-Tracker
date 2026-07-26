@@ -1,6 +1,7 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–6 implemented**, Phase 7 planned, Phase 8 deferred.
+Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5 (polish /
+thumbnails) and Phase 8 (dashboard) both deferred to a future release.
 Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -40,16 +41,16 @@ So:
 | CLI command | Alias | TUI equivalent | Phase |
 |---|---|---|---|
 | `list` | `l` | Main list pane | ✅ 0 |
-| `config` | — | `?` help/status overlay | 1 |
-| `lookup <name>` (detail half) | `lk` | `Enter` → detail view | 2 |
-| `jump <name>` | `j` | `o` → open in browser | 2 |
-| `live` | `lv` | Live badges + `L` live-only view | 3 |
-| `lookup <name>` (search half) | `lk` | `/` → incremental filter | 4 |
-| `sync <name>` | `s` | `s` on selection | 5 |
-| `delete <name>` | `d` | `d` + confirm modal | 5 |
-| `create <url>` | `c` | `a` → URL input modal | 5 |
-| *(none — known gap)* | — | `e` → edit modal | 6 |
-| `watch` | `w` | Auto-refresh in place | 7 |
+| `config` | — | `?` help/status overlay | ✅ 1 |
+| `lookup <name>` (detail half) | `lk` | `Enter` → detail view | ✅ 2 |
+| `jump <name>` | `j` | `o` → open in browser | ✅ 2 |
+| `live` | `lv` | Live badges + `L` live-only view | ✅ 3 |
+| `lookup <name>` (search half) | `lk` | `/` → incremental filter | ✅ 4 |
+| `sync <name>` | `s` | `s` on selection | ✅ 5 |
+| `delete <name>` | `d` | `d` + confirm modal | ✅ 5 |
+| `create <url>` | `c` | `a` → URL input modal | ✅ 5 |
+| *(none — known gap)* | — | `e` → edit modal | ✅ 6 |
+| `watch` | `w` | Auto-refresh in place | ✅ 7 |
 | *(none — future)* | — | Dashboard / charts | 8 |
 
 ## Keymap
@@ -429,10 +430,10 @@ by construction.
   branch gated on `if app.pending > 0` — never even polled while nothing's
   running, so it's free at rest.
 
-**Known issue, logged not fixed** (see Phase 7's note and Known gaps below):
-live badges don't update after startup, so a VTuber created already-live
-won't show `LIVE` until the TUI restarts, even after a manual `s` corrects
-the backend's own data.
+**Known issue at the time, since fixed:** live badges didn't update after
+startup, so a VTuber created already-live wouldn't show `LIVE` until the TUI
+restarted, even after a manual `s` corrected the backend's own data. Phase
+7's auto-refresh ticker closed this — see that phase's notes.
 
 **Review:** sync a VTuber; create one from a real URL; delete it again and
 confirm the modal blocks an accidental `d`; spinner and hints both visible
@@ -480,27 +481,33 @@ org/suborg works normally.
 
 # Phase 7 — Auto-refresh
 
-Maps `watch`.
+Maps `watch`. **Done**, reviewed by running. This closes out TUI v0.1 — every
+row in Command mapping above is now ✅ except the deferred Phase 8 dashboard.
 
-- [ ] Background ticker on the configured `watch_interval_secs`, feeding the
+- [x] Background ticker on the configured `watch_interval_secs`, feeding the
       Phase 1 channel
-- [ ] Reuse `watch::apply(state, poll) -> (state, actions)` **verbatim**
-- [ ] Rows update in place; newly-live VTubers highlight
+- [x] Reuse `watch::apply(state, poll) -> (state, actions)` **verbatim**
+- [x] Rows update in place; newly-live VTubers highlight
 
 `apply` is pure, has 17 existing tests, and encodes both load-bearing rules
-from Traps. Do not reimplement either.
+from Traps — nothing here reimplements them. `tui/mod.rs`'s old one-shot
+`spawn_fetch_live` (fired once at `run()`'s startup, never again) became
+`spawn_live_ticker`: an immediate poll followed by a self-rescheduling
+`sleep(watch_interval_secs)` loop, for the life of the session. Each
+successful poll is handed to `App::set_live`, which now folds it through a
+private `watch_state: WatchState` via `watch::apply` instead of just
+overwriting `live_ids` — the same edge-detection `oshihub watch` itself
+runs, reused rather than re-derived. `newly_live: HashSet<String>` holds only
+the ids from *that poll's* `WentLive`/`BurstWentLive` actions (never
+`Seeded` — matching why `watch` doesn't notify for it either), replaced
+wholesale each poll rather than accumulated, so a highlight lasts exactly one
+interval before the row settles back to the plain green `LIVE` badge
+(`theme::just_went_live`, reversed video to stand out from `live_status`).
 
-**Confirmed missing, not just theoretical:** creating a VTuber who's already
-live on Twitch doesn't show a `LIVE` badge until the TUI is restarted, even
-after a manual `s` sync makes the backend's own live data correct. Traced to
-`tui/mod.rs`: `spawn_fetch_live` only runs once, at `run()`'s startup
-(`mod.rs:52`); the post-action refresh after a successful `s`/`d`/`a`
-(`mod.rs:131`) only calls `spawn_fetch_vtubers`, never `spawn_fetch_live`. So
-`App.live_ids` is populated exactly once per session and never again —
-nothing currently re-fetches `/api/vtubers/live` while the TUI sits open,
-regardless of what changes on the backend. This phase's ticker is the
-intended fix; logged here rather than patched ad hoc so it lands as part of
-the real refresh mechanism instead of a one-off re-fetch bolted onto Phase 5.
+This also closes the live-badge staleness gap logged during Phase 5's
+review: creating a VTuber already live on Twitch no longer needs a TUI
+restart (or a manual `s` sync) to show `LIVE` — the next tick of the ticker
+picks it up on its own.
 
 **Polling, not SSE.** `CLAUDE.md` and `Todo.md` record this reversal: polling
 won because this runs on a laptop, and a pushed event fired while the lid is
@@ -510,8 +517,35 @@ shut is gone, whereas the next poll returns current truth.
 terminal instance plus the enabled `oshihub-watch.service` user unit already
 double-notify; a notifying TUI would be a third. In-place visual updates only.
 
-**Review:** leave the TUI open across a real go-live; the row updates within
-one interval with no manual refresh.
+**Review:** `OSHIHUB_WATCH_INTERVAL=15 cargo run -- tui`, left open across a
+real go-live (or an `a`-create of an already-live channel) — the row picked
+up `LIVE` with no keypress, reversed for one poll, then settled to the plain
+badge. VTubers already live at startup never got the highlight.
+
+---
+
+# Phase 7.5 — Polish & thumbnails (planned)
+
+Not scheduled yet — a holding pen for this doc rather than an open-ended
+Known gaps list growing without a home. Two things belong here before
+Phase 8:
+
+- [ ] **Thumbnails inside the TUI.** `lookup`/`live` render them via `viuer`,
+      which writes graphics escapes straight at wherever the cursor sits.
+      Ratatui repaints every cell from a fresh buffer each frame and has no
+      idea those cells hold an image — the two can't currently coexist (see
+      Traps). Needs an actual design pass: either a redraw-aware image crate
+      (`ratatui-image` is the obvious candidate to evaluate first) or a
+      half-block/ANSI-art approach drawn as ordinary styled cells so ratatui
+      owns every pixel it's responsible for. Not investigated yet — this
+      entry is the placeholder to come back to, not a design decision.
+- [ ] **General polish pass.** No specific list yet; the intent is to catch
+      small UX rough edges (a couple already sit in Known gaps below) rather
+      than opening a one-off phase per fix. Add to this bullet as they turn
+      up instead of starting a new section each time.
+
+Deliberately light on detail — the point right now is reserving the slot
+before Phase 8, not committing to a design for either item.
 
 ---
 
@@ -529,7 +563,8 @@ already collects — no new tracking, just querying what's there.
 
 Before designing any aggregation endpoint, check what shape ratatui's
 `Sparkline`/`Chart` widgets actually want data in — the terminal-charting half
-is the harder one, not the data. Out of scope until Phase 7 lands.
+is the harder one, not the data. Out of scope for v0.1; first thing on top of
+it once picked back up.
 
 ---
 
@@ -539,11 +574,7 @@ is the harder one, not the data. Out of scope until Phase 7 lands.
   halfblocks decision (Phase 2).
 - The TUI filters on `isTracked` where `oshihub list` does not. The counts
   happen to match today because everything in the database is tracked.
-- Live badges go stale for the life of a TUI session — `fetch_live_vtubers`
-  only runs once, at startup. A VTuber that goes live afterward (or is
-  `a`-created already live) won't show `LIVE` until the TUI restarts, even
-  after a manual `s` sync corrects the backend's own data. Confirmed live
-  against a real Twitch VTuber, not theoretical. Fix is Phase 7's ticker,
-  not a standalone patch — see that phase's note for the exact trace.
-- No lock, same as `watch` — nothing stops two TUI instances polling
-  independently once Phase 7 lands.
+- No lock, same as `watch` — nothing stops two TUI instances, or a TUI
+  session and the enabled `oshihub-watch.service` user unit, polling
+  `/api/vtubers/live` independently. Harmless (each just re-derives the same
+  state), but redundant load on the backend.

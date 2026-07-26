@@ -137,7 +137,15 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
             // every row is already live when that's on anyway.
             if app.live_ids.contains(&v.id) {
                 spans.push(Span::raw("  "));
-                spans.push(Span::styled("LIVE", theme::live_status(true)));
+                // `newly_live` only holds ids from the *most recent* poll's
+                // WentLive/BurstWentLive actions — everyone else already-live
+                // gets the plain badge.
+                let style = if app.newly_live.contains(&v.id) {
+                    theme::just_went_live()
+                } else {
+                    theme::live_status(true)
+                };
+                spans.push(Span::styled("LIVE", style));
             }
             ListItem::new(Line::from(spans))
         })

@@ -17,13 +17,16 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use crate::config;
 use crate::routes::{ApiError, LiveEntry, VtuberDetail};
 
-/// What can arrive asynchronously and needs to update `App`. Grows with each
-/// later phase (an auto-refresh tick) — Phase 5 adds `ActionDone` for the
-/// three mutating actions, distinct from `ActionFailed` because a
-/// successful mutation also needs to trigger a list refresh and a failed
-/// `o` never does.
+/// What can arrive asynchronously and needs to update `App`. Phase 5 adds
+/// `ActionDone` for the three mutating actions, distinct from `ActionFailed`
+/// because a successful mutation also needs to trigger a list refresh and a
+/// failed `o` never does. `Live` used to arrive exactly once, from a
+/// startup-only fetch; Phase 7's ticker now resends it every
+/// `watch_interval_secs`, so `App::set_live` folds each one through
+/// `watch::apply` instead of just overwriting `live_ids`.
 enum Message {
     Vtubers(Result<Vec<VtuberRow>, ApiError>),
     Detail {
@@ -49,7 +52,11 @@ pub async fn run() -> anyhow::Result<()> {
     // already resolved. Spawning it means the first frame(s) can genuinely
     // show "Loading..." while it's in flight.
     spawn_fetch_vtubers(tx.clone());
-    spawn_fetch_live(tx.clone());
+    // Same `watch_interval_secs` config `oshihub watch` reads — already
+    // floored to `MIN_WATCH_INTERVAL_SECS` by `config::config()` itself, so
+    // there's no second floor to apply here.
+    let interval_secs = config::config().watch_interval_secs;
+    spawn_live_ticker(tx.clone(), interval_secs);
 
     let result = run_loop(&mut terminal, &mut app, tx, rx).await;
 
@@ -64,16 +71,36 @@ fn spawn_fetch_vtubers(tx: mpsc::Sender<Message>) {
     });
 }
 
-fn spawn_fetch_live(tx: mpsc::Sender<Message>) {
+/// Phase 7's ticker: fires an immediate poll (replacing what used to be a
+/// one-shot `spawn_fetch_live` at startup), then keeps polling every
+/// `interval_secs` for as long as the TUI runs. `App::set_live` is where
+/// `watch::apply`'s fold actually happens — this just keeps feeding it,
+/// mirroring `oshihub watch`'s own loop but sending `Message`s instead of
+/// printing/notifying.
+///
+/// Self-rescheduling `sleep` rather than `tokio::time::interval`, same
+/// reason `watch::run` avoids it: `interval`'s default `MissedTickBehavior`
+/// fires a burst of catch-up ticks after something (a slow poll, a laptop
+/// suspend) makes it fall behind, which is never what's wanted here either.
+fn spawn_live_ticker(tx: mpsc::Sender<Message>, interval_secs: u64) {
     tokio::spawn(async move {
-        // Dedup here, not in App: `watch::dedupe_one_per_vtuber` is the
-        // already-tested rule for collapsing a VTuber's stray duplicate live
-        // docs (belt-and-braces — the backend shouldn't produce them, see
-        // watch.rs) into one, reused verbatim rather than reimplemented.
-        let result = crate::routes::fetch_live_vtubers()
-            .await
-            .map(|entries| crate::watch::dedupe_one_per_vtuber(&entries));
-        let _ = tx.send(Message::Live(result)).await;
+        loop {
+            // Dedup here, not in App: `watch::dedupe_one_per_vtuber` is the
+            // already-tested rule for collapsing a VTuber's stray duplicate
+            // live docs (belt-and-braces — the backend shouldn't produce
+            // them, see watch.rs) into one, reused verbatim rather than
+            // reimplemented.
+            let result = crate::routes::fetch_live_vtubers()
+                .await
+                .map(|entries| crate::watch::dedupe_one_per_vtuber(&entries));
+            // The receiver only drops when `run_loop` has already returned
+            // (the TUI is exiting) — stop polling rather than spin forever
+            // sending into the void.
+            if tx.send(Message::Live(result)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+        }
     });
 }
 
