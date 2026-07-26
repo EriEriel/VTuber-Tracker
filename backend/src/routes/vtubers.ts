@@ -234,23 +234,11 @@ vtubersRoute.get('/api/vtubers/live', async (c) => {
   try {
     const liveStreams = await Stream.find({ status: 'live' }).sort({ startTime: -1 });
 
-    // A VTuber should only ever have one truly-live stream, but a rapid
-    // disconnect/reconnect can fire stream.online twice before stream.offline
-    // catches up, leaving more than one `status: 'live'` doc behind (seen live
-    // in prod data). Streams are already sorted newest-first, so keeping the
-    // first occurrence per vtuberId picks the actually-current one.
-    const seenVtuberIds = new Set<string>();
-    const currentLiveStreams = liveStreams.filter((s) => {
-      const key = s.vtuberId.toString();
-      if (seenVtuberIds.has(key)) return false;
-      seenVtuberIds.add(key);
-      return true;
-    });
-
-    const vtubers = await VTuber.find({ _id: { $in: [...seenVtuberIds] } });
+    const vtuberIds = [...new Set(liveStreams.map((s) => s.vtuberId.toString()))];
+    const vtubers = await VTuber.find({ _id: { $in: vtuberIds } });
     const vtubersById = new Map(vtubers.map((v) => [v._id.toString(), v]));
 
-    const results = currentLiveStreams
+    const results = liveStreams
       .map((s) => {
         const vtuber = vtubersById.get(s.vtuberId.toString());
         // Stream outlived its VTuber (deletion doesn't retroactively end streams

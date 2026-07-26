@@ -7,12 +7,13 @@
 // Stream document from the event payload (it's intentionally minimal — no
 // title, no thumbnail) — we call the existing syncFromTwitch() so the
 // already-tested Helix -> Mongo pipeline does the real work. `stream.offline`
-// carries even less (no timestamp at all), so it's handled directly here:
-// flip the matching live Stream doc to ended and stamp endTime ourselves.
+// carries even less (no timestamp at all), so it goes through markEnded()
+// directly rather than syncFromTwitch(), stamping endTime on arrival.
 
-import { VTuber, Stream } from '../models';
+import { VTuber } from '../models';
 import { getValidUserToken } from './twitch-user-token';
 import { syncFromTwitch } from './sync';
+import { markEnded } from './live-state';
 
 const EVENT_TYPES = ['stream.online', 'stream.offline'] as const;
 type EventType = (typeof EVENT_TYPES)[number];
@@ -171,10 +172,7 @@ async function handleNotification(payload: any): Promise<void> {
   } else if (type === 'stream.offline') {
     // stream.offline carries no timestamp, so endTime is stamped on arrival
     // rather than derived from the event payload.
-    const ended = await Stream.findOneAndUpdate(
-      { vtuberId: vtuber._id, status: 'live' },
-      { status: 'ended', endTime: new Date() }
-    );
+    const ended = await markEnded(vtuber._id);
     if (ended) {
       console.log(`${vtuber.name} went offline on Twitch — marked stream ended`);
     }

@@ -1,5 +1,6 @@
 import { VTuber, Stream, Clip, StatSnapshot } from '../models';
 import { getValidTwitchToken } from './twitch-token';
+import { markLive } from './live-state';
 import { mapHolodexStream, mapHolodexStatSnapshot, mapHolodexClip } from './mappers/holodex.mappers';
 import { mapYoutubeStream, mapYoutubeStatSnapshot } from './mappers/youtube.mapper';
 import { mapTwitchLiveStream, mapTwitchVod, mapTwitchStatSnapshot, mapTwitchClip } from './mappers/twitch.mapper';
@@ -172,11 +173,16 @@ export async function syncFromHolodex(vtuberId?: string, force = false): Promise
             const videos = await vRes.json() as any[];
             for (const video of videos) {
               try {
-                await Stream.findOneAndUpdate(
-                  { platform: 'youtube', externalId: video.id },
-                  mapHolodexStream(video, vtuber._id.toString()),
-                  { upsert: true, returnDocument: 'after' }
-                );
+                const mapped = mapHolodexStream(video, vtuber._id.toString());
+                if (mapped.status === 'live') {
+                  await markLive(vtuber._id, mapped);
+                } else {
+                  await Stream.findOneAndUpdate(
+                    { platform: 'youtube', externalId: video.id },
+                    mapped,
+                    { upsert: true, returnDocument: 'after' }
+                  );
+                }
               } catch (err) {
                 console.error(`ID: ${video.id}, Database error:`, err);
               }
@@ -338,11 +344,16 @@ export async function syncFromYoutube(vtuberId?: string, force = false): Promise
                 const videos = vData.items || [];
 
                 for (const video of videos) {
-                  await Stream.findOneAndUpdate(
-                    { platform: 'youtube', externalId: video.id },
-                    mapYoutubeStream(video, vtuber._id.toString()),
-                    { upsert: true, returnDocument: 'after' }
-                  );
+                  const mapped = mapYoutubeStream(video, vtuber._id.toString());
+                  if (mapped.status === 'live') {
+                    await markLive(vtuber._id, mapped);
+                  } else {
+                    await Stream.findOneAndUpdate(
+                      { platform: 'youtube', externalId: video.id },
+                      mapped,
+                      { upsert: true, returnDocument: 'after' }
+                    );
+                  }
                 }
               } else {
                 console.error(`YouTube videos fetch non-OK for ${vtuber.name}: ${vRes.status}`);
@@ -487,11 +498,7 @@ export async function syncFromTwitch(vtuberId?: string, force = false): Promise<
             const sData = await sRes.json() as any;
             const liveStream = sData.data?.[0];
             if (liveStream) {
-              await Stream.findOneAndUpdate(
-                { platform: 'twitch', externalId: liveStream.id },
-                mapTwitchLiveStream(liveStream, vtuber._id.toString(), userLogin),
-                { upsert: true, returnDocument: 'after' }
-              );
+              await markLive(vtuber._id, mapTwitchLiveStream(liveStream, vtuber._id.toString(), userLogin));
             }
           } else {
             console.error(`Twitch streams fetch non-OK for ${vtuber.name}: ${sRes.status}`);
