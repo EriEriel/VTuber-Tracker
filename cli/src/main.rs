@@ -108,9 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             });
         }
-        Commands::Create { url } => {
-            create_vtuber_channel(&url).await?;
-        }
+        Commands::Create { url } => match create_vtuber_channel(&url).await {
+            Ok(()) => println!("Successfully created VTuber channel from {url}"),
+            Err(err) => println!("Failed to create VTuber channel from {url}: {err}"),
+        },
         Commands::Lookup { name, limit } => {
             let vtubers = lookup_by_name(&name).await?;
             if vtubers.is_empty() {
@@ -192,12 +193,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!();
             }
         }
-        Commands::Delete { name } => {
-            delete_vtuber_channel(&name).await?;
+        Commands::Delete { name } => match delete_vtuber_channel(&name).await {
+            Ok(v) => println!(
+                "Successfully deleted VTuber channel name: {} with ID {}",
+                v.english_name, v.id
+            ),
+            Err(err) => println!("Failed to delete VTuber channel '{name}': {err}"),
         },
-        Commands::Sync { name } => {
-            sync_vtuber_channels(Some(&name)).await?;
-        }
+        Commands::Sync { name } => match sync_vtuber_channels(Some(&name)).await {
+            Ok(()) => println!("Successfully synced VTuber channel: {name}"),
+            Err(err) => println!("Failed to sync VTuber channel '{name}': {err}"),
+        },
         Commands::Live => {
             let live = fetch_live_vtubers().await?;
             if live.is_empty() {

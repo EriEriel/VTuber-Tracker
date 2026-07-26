@@ -25,6 +25,10 @@ pub enum ApiError {
     },
     Transport(reqwest::Error),
     Decode(serde_json::Error),
+    // Local validation failures that never reach the network — a malformed
+    // URL, a name that matched nothing. Kept on this enum rather than a
+    // second error type so every routes.rs function still returns one thing.
+    Invalid(String),
 }
 
 impl std::fmt::Display for ApiError {
@@ -40,6 +44,7 @@ impl std::fmt::Display for ApiError {
             // backend look like a crash rather than "couldn't connect".
             ApiError::Transport(err) => write!(f, "could not reach the backend: {err}"),
             ApiError::Decode(err) => write!(f, "could not parse the backend's response: {err}"),
+            ApiError::Invalid(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -86,7 +91,7 @@ async fn read_body(res: reqwest::Response) -> Result<String, ApiError> {
     Ok(body)
 }
 
-pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
+pub async fn fetch_vtubers() -> Result<Vec<VtuberChannel>, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers", api_url()))
@@ -106,19 +111,19 @@ struct CreateVtuberChannel {
     channel_id: String,
 }
 
-fn parse_channel_url(url: &str) -> Result<(Platform, String), Box<dyn std::error::Error>> {
+fn parse_channel_url(url: &str) -> Result<(Platform, String), ApiError> {
     let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let without_www = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
     let (host, path) = without_www
         .split_once('/')
-        .ok_or("URL is missing a channel path")?;
+        .ok_or_else(|| ApiError::Invalid("URL is missing a channel path".to_string()))?;
 
     let platform = if host.ends_with("youtube.com") || host.ends_with("youtu.be") {
         Platform::Youtube
     } else if host.ends_with("twitch.tv") {
         Platform::Twitch
     } else {
-        return Err(format!("unsupported platform host: {host}").into());
+        return Err(ApiError::Invalid(format!("unsupported platform host: {host}")));
     };
 
     let platform_channel_id = path
@@ -126,13 +131,13 @@ fn parse_channel_url(url: &str) -> Result<(Platform, String), Box<dyn std::error
         .rsplit('/')
         .next()
         .filter(|segment| !segment.is_empty())
-        .ok_or("could not find a channel id in the URL")?
+        .ok_or_else(|| ApiError::Invalid("could not find a channel id in the URL".to_string()))?
         .to_string();
 
     Ok((platform, platform_channel_id))
 }
 
-pub async fn create_vtuber_channel(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn create_vtuber_channel(url: &str) -> Result<(), ApiError> {
     let (platform, channel_id) = parse_channel_url(url)?;
     let body = CreateVtuberChannel {
         platform,
@@ -146,23 +151,16 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), Box<dyn std::error::
         .send()
         .await?;
 
-    let status = res.status();
-    let body = res.text().await?;
-
-    if status.is_success() {
-        println!("Successfully created VTuber channel from {url}");
-    } else {
-        println!("Failed to create VTuber channel from {url}. Status: {status}\n{body}");
-    }
-
+    read_body(res).await?;
     Ok(())
 }
 
-pub async fn delete_vtuber_channel(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn delete_vtuber_channel(name: &str) -> Result<VtuberChannel, ApiError> {
     let vtubers = lookup_by_name(name).await?;
     let v = vtubers
-        .first()
-        .ok_or_else(|| format!("No VTuber matching '{}' found", name))?;
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::Invalid(format!("No VTuber matching '{}' found", name)))?;
 
     let client = crate::config::client();
     let res = client
@@ -170,19 +168,11 @@ pub async fn delete_vtuber_channel(name: &str) -> Result<(), Box<dyn std::error:
         .send()
         .await?;
 
-    let status = res.status();
-    let body = res.text().await?;
-
-    if status.is_success() {
-        println!("Successfully deleted VTuber channel name: {} with ID {}", v.english_name, v.id);
-    } else {
-        println!("Failed to delete VTuber channel with ID {}. Status: {status}\n{body}", v.id);
-    }
-
-    Ok(())
+    read_body(res).await?;
+    Ok(v)
 }
 
-pub async fn lookup_by_name(name: &str) -> Result<Vec<VtuberChannel>, Box<dyn std::error::Error>> {
+pub async fn lookup_by_name(name: &str) -> Result<Vec<VtuberChannel>, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers", api_url()))
@@ -230,7 +220,7 @@ pub struct VtuberDetail {
 // GET /api/vtubers/:id also returns `vtuber` and `snapshots`, but Lookup
 // only needs streams/clips for now — serde ignores fields a struct doesn't
 // declare, so there's no need to model the rest.
-pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, Box<dyn std::error::Error>> {
+pub async fn fetch_vtuber_detail(id: &str) -> Result<VtuberDetail, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers/{id}", api_url()))
@@ -326,20 +316,14 @@ pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, ApiError> {
     Ok(live)
 }
 
-async fn fetch_profile_url(id: &str) -> Result<String, Box<dyn std::error::Error>> {
+async fn fetch_profile_url(id: &str) -> Result<String, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers/{id}/profile-url", api_url()))
         .send()
         .await?;
 
-    let status = res.status();
-    let body = res.text().await?;
-
-    if !status.is_success() {
-        return Err(format!("backend returned {status}: {body}").into());
-    }
-
+    let body = read_body(res).await?;
     let parsed: ProfileUrlResponse = serde_json::from_str(&body)?;
     Ok(parsed.url)
 }
@@ -361,52 +345,37 @@ pub async fn jump_to(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), ApiError> {
     match name {
         Some(name) => {
             let vtubers = lookup_by_name(name).await?;
-            match vtubers.first() {
-                Some(v) => {
-                    let sync_path = match v.source {
-                        Source::Holodex => "holodex",
-                        Source::Youtube_api => "youtube",
-                        Source::Twitch_api => "twitch",
-                    };
+            let v = vtubers.into_iter().next().ok_or_else(|| {
+                ApiError::Invalid(format!("VTuber channel {name} is not founded in database."))
+            })?;
 
-                    let client = crate::config::client();
-                    let res = client
-                        .post(format!("{}/api/sync/{sync_path}?id={}&force=true", api_url(), v.id))
-                        .send()
-                        .await?;
+            let sync_path = match v.source {
+                Source::Holodex => "holodex",
+                Source::Youtube_api => "youtube",
+                Source::Twitch_api => "twitch",
+            };
 
-                    let status = res.status();
-                    let body = res.text().await?;
+            let client = crate::config::client();
+            let res = client
+                .post(format!("{}/api/sync/{sync_path}?id={}&force=true", api_url(), v.id))
+                .send()
+                .await?;
 
-                    if status.is_success() {
-                        println!("Successfully synced VTuber channel: {}", v.english_name);
-                    } else {
-                        println!("Failed to sync VTuber channel: {}. Status: {status}\n{body}", v.english_name);
-                    }
-                }
-                None => println!("VTuber channel {} is not founded in database.", name),
-            }
+            read_body(res).await?;
         }
         None => {
-                let client = crate::config::client();
-                let res = client
-                    .post(format!("{}/api/sync/all", api_url()))
-                    .body("force=true")
-                    .send()
-                    .await?;
+            let client = crate::config::client();
+            let res = client
+                .post(format!("{}/api/sync/all", api_url()))
+                .body("force=true")
+                .send()
+                .await?;
 
-                let status = res.status();
-                let body = res.text().await?;
-
-                if status.is_success() {
-                    println!("Successfully synced all VTuber channels");
-                } else {
-                    println!("Failed to sync VTuber channels. Status: {status}\n{body}");
-                }
+            read_body(res).await?;
         }
     }
 

@@ -1,60 +1,95 @@
 mod app;
 mod event;
+mod theme;
 mod ui;
 
 use app::{App, VtuberRow};
 use crossterm::{
     cursor::Show,
+    event::EventStream,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
+use tokio::sync::mpsc;
+
+use crate::routes::ApiError;
+
+/// What can arrive asynchronously and needs to update `App`. Grows with each
+/// later phase (a detail fetch, an action's outcome, an auto-refresh tick) —
+/// Phase 1 only needs the initial list load, so only that variant exists.
+enum Message {
+    Vtubers(Result<Vec<VtuberRow>, ApiError>),
+}
 
 /// Entry point called from clap's `Tui` subcommand handler in main.rs.
 pub async fn run() -> anyhow::Result<()> {
     install_panic_hook();
 
     let mut terminal = setup_terminal()?;
-
     let mut app = App::new();
 
-    // v0.1: one blocking fetch before the loop starts. No spinner logic,
-    // no background task — just show "Loading..." for one frame (or zero,
-    // if API is fast), then populate. Refresh-on-keypress is a v0.2
-    // problem once this feels solid.
-    match fetch_tracked_vtubers().await {
-        Ok(rows) => app.set_items(rows),
-        Err(e) => app.set_error(e.to_string()),
-    }
+    let (tx, rx) = mpsc::channel(8);
+    // Dispatched as a background task rather than awaited here: with a
+    // blocking pre-loop fetch, `LoadState::Loading` was set but never
+    // actually rendered, since nothing drew a frame until the fetch had
+    // already resolved. Spawning it means the first frame(s) can genuinely
+    // show "Loading..." while it's in flight.
+    tokio::spawn(async move {
+        let _ = tx.send(Message::Vtubers(fetch_tracked_vtubers().await)).await;
+    });
 
-    let result = run_loop(&mut terminal, &mut app);
+    let result = run_loop(&mut terminal, &mut app, rx).await;
 
     restore_terminal(&mut terminal)?;
 
     result
 }
 
-/// The render loop. This is the "immediate mode" core: draw, poll input,
-/// mutate state, repeat. Ratatui doesn't track what changed between frames —
-/// it just re-describes the whole UI every tick. That's *why* `draw` in
-/// ui.rs is a pure function of `&App`: there's no incremental update to
-/// reason about, which is what makes this model easy to keep correct.
+/// The render loop. This is the "immediate mode" core: draw, wait for
+/// something to react to, mutate state, repeat. Ratatui doesn't track what
+/// changed between frames — it just re-describes the whole UI every tick.
+/// That's *why* `draw` in ui.rs is a pure function of `&App`: there's no
+/// incremental update to reason about, which is what makes this model easy
+/// to keep correct.
 ///
-/// Deliberately sync, even though `run()` is async: `event::poll` blocks the
-/// thread, so nothing else on the runtime progresses while we're in here.
-/// Fine while the only fetch happens before the loop; the moment a
-/// background refresh exists, this has to become a `select!` over a channel
-/// and crossterm's async `EventStream` instead.
-fn run_loop(
+/// `select!` over crossterm's async `EventStream` and the message channel,
+/// rather than the old blocking `event::poll`: a blocking read stalls the
+/// whole tokio runtime, so nothing spawned (like the background fetch above)
+/// could ever make progress while waiting on a keypress.
+async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    mut rx: mpsc::Receiver<Message>,
 ) -> anyhow::Result<()> {
+    let mut events = EventStream::new();
+
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
-        event::handle_events(app)?;
+
+        tokio::select! {
+            maybe_event = events.next() => {
+                match maybe_event {
+                    Some(Ok(event)) => event::handle_event(app, event),
+                    Some(Err(err)) => return Err(err.into()),
+                    // The stream ended (stdin closed) — nothing left to wait
+                    // on; let the next loop check re-evaluate should_quit.
+                    None => {}
+                }
+            }
+            Some(message) = rx.recv() => handle_message(app, message),
+        }
     }
     Ok(())
+}
+
+fn handle_message(app: &mut App, message: Message) {
+    match message {
+        Message::Vtubers(Ok(rows)) => app.set_items(rows),
+        Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
+    }
 }
 
 /// Enter raw mode + alternate screen. Raw mode hands every keypress
@@ -113,15 +148,8 @@ fn install_panic_hook() {
 /// The mapper-at-the-boundary point: `routes` owns all the reqwest/serde
 /// work and hands back the raw API DTO; `VtuberRow::from` narrows it to what
 /// the render layer needs, so nothing in `ui.rs` ever sees a `VtuberChannel`.
-///
-/// `map_err` rather than a bare `?`: `routes` returns `Box<dyn Error>`, which
-/// is not itself an `Error` and isn't `Send + Sync`, so anyhow's blanket
-/// `From` impl doesn't apply. Flattening to a message is fine here — the TUI
-/// only ever renders it as a string.
-async fn fetch_tracked_vtubers() -> anyhow::Result<Vec<VtuberRow>> {
-    let channels = crate::routes::fetch_vtubers()
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+async fn fetch_tracked_vtubers() -> Result<Vec<VtuberRow>, ApiError> {
+    let channels = crate::routes::fetch_vtubers().await?;
 
     Ok(channels
         .iter()

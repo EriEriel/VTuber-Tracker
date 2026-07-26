@@ -1,5 +1,6 @@
 use ratatui::widgets::ListState;
 
+use crate::config::{self, ConfigSource};
 use crate::models::{Platform, VtuberChannel};
 
 /// Minimal shape for what the list screen needs.
@@ -45,21 +46,54 @@ pub enum LoadState {
     Failed(String),
 }
 
+/// Which screen is on top. `Help` overlays whatever `load_state` is
+/// currently rendering underneath, rather than replacing it — closing the
+/// overlay returns to exactly what was there before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    List,
+    Help,
+}
+
 pub struct App {
     pub items: Vec<VtuberRow>,
     pub list_state: ListState,
     pub load_state: LoadState,
     pub should_quit: bool,
+    pub screen: Screen,
+    /// Config summary for the `?` overlay, resolved once at startup —
+    /// `ui::draw` stays a pure function of `&App`, so it reads these instead
+    /// of calling back into `config::config()` itself.
+    pub config_url: String,
+    pub config_source: String,
+    pub config_token: String,
 }
 
 impl App {
     pub fn new() -> Self {
+        let cfg = config::config();
         Self {
             items: Vec::new(),
             list_state: ListState::default(),
             load_state: LoadState::Loading,
             should_quit: false,
+            screen: Screen::List,
+            config_url: cfg.api_url.clone(),
+            config_source: describe_source(&cfg.source),
+            config_token: match &cfg.token_source {
+                Some(source) => format!("set ({})", describe_source(source)),
+                // Never the token itself — matching `Commands::Config` in
+                // main.rs, this is only ever enough to debug a 401.
+                None => "not set".to_string(),
+            },
         }
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.screen = match self.screen {
+            Screen::Help => Screen::List,
+            Screen::List => Screen::Help,
+        };
     }
 
     pub fn set_items(&mut self, items: Vec<VtuberRow>) {
@@ -96,5 +130,13 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+    }
+}
+
+fn describe_source(source: &ConfigSource) -> String {
+    match source {
+        ConfigSource::Env => "environment variable".to_string(),
+        ConfigSource::File(path) => path.display().to_string(),
+        ConfigSource::Default => "built-in default".to_string(),
     }
 }
