@@ -4,9 +4,10 @@
 // is the TUI's equivalent vocabulary.
 //
 // Convention: the same concept keeps the same colour in both files, and
-// both get updated together. Only concepts Phase 1 actually renders live
-// here — `theme.rs`'s `status_tag`/`live_status`/`url` land in the phases
-// that first put a stream, a live badge, or a URL on screen (3, 3, 2).
+// both get updated together. Only concepts with a real call site live
+// here — a binary crate's dead-code lint fires on unreachable `pub` items
+// the same as private ones, so each function is added in the phase that
+// first puts it on screen.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -17,10 +18,48 @@ pub fn name() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Secondary detail: platform tags, hints. Mirrors `theme::muted`'s intent
-/// (de-emphasised secondary text) with an explicit colour rather than a
-/// `DIM` modifier — terminal support for `DIM` is inconsistent, and
-/// `DarkGray` is what Phase 0 already shipped and was verified to render.
+/// Secondary detail: platform tags, hints, field labels. Mirrors
+/// `theme::muted`'s intent (de-emphasised secondary text) with an explicit
+/// colour rather than a `DIM` modifier — terminal support for `DIM` is
+/// inconsistent, and `DarkGray` is what Phase 0 already shipped and was
+/// verified to render.
 pub fn muted() -> Style {
     Style::default().fg(Color::DarkGray)
+}
+
+/// Section heading such as "Recent streams:". Mirrors `theme::heading`.
+pub fn heading() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// A URL — de-emphasised, since it's for copying rather than reading.
+/// Mirrors `theme::url`'s dimmed blue.
+pub fn url() -> Style {
+    Style::default().fg(Color::Blue).add_modifier(Modifier::DIM)
+}
+
+/// A stream's status tag, e.g. `[live]`. Mirrors `theme::status_tag`.
+pub fn status_tag(status: &str) -> Style {
+    match status {
+        "live" => Style::default()
+            .fg(Color::LightGreen)
+            .add_modifier(Modifier::BOLD),
+        "upcoming" => Style::default().fg(Color::Yellow),
+        "ended" => muted(),
+        // 'unknown' is a real value in the Stream schema, same as theme.rs.
+        _ => Style::default(),
+    }
+}
+
+/// A VTuber's overall live state, e.g. the detail screen's "Status:" line.
+/// Deliberately shares its green with `status_tag("live")`, mirroring
+/// `theme::live_status`.
+pub fn live_status(is_live: bool) -> Style {
+    if is_live {
+        Style::default()
+            .fg(Color::LightGreen)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        muted()
+    }
 }

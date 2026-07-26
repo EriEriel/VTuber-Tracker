@@ -18,13 +18,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
 
-    match &app.load_state {
-        LoadState::Loading => draw_message(frame, chunks[0], "Loading tracked VTubers..."),
-        LoadState::Failed(msg) => draw_message(frame, chunks[0], &format!("Error: {msg}")),
-        LoadState::Loaded if app.items.is_empty() => {
-            draw_message(frame, chunks[0], "No VTubers tracked yet.")
+    if app.screen == Screen::Detail {
+        draw_detail(frame, chunks[0], app);
+    } else {
+        match &app.load_state {
+            LoadState::Loading => draw_message(frame, chunks[0], "Loading tracked VTubers..."),
+            LoadState::Failed(msg) => draw_message(frame, chunks[0], &format!("Error: {msg}")),
+            LoadState::Loaded if app.items.is_empty() => {
+                draw_message(frame, chunks[0], "No VTubers tracked yet.")
+            }
+            LoadState::Loaded => draw_list(frame, chunks[0], app),
         }
-        LoadState::Loaded => draw_list(frame, chunks[0], app),
     }
 
     draw_status_bar(frame, chunks[1], app);
@@ -74,11 +78,105 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
+    // An action failure (currently only `o`) has no screen of its own to
+    // show it on, so it takes over the status bar until the next action or
+    // screen change clears it.
+    if let Some(err) = &app.last_error {
+        let p = Paragraph::new(format!("Error: {err}"));
+        frame.render_widget(p, area);
+        return;
+    }
+
     let hints = match app.screen {
-        Screen::List => "j/k move  ·  ? help  ·  q quit",
+        Screen::List => "j/k move  ·  Enter detail  ·  o open  ·  ? help  ·  q quit",
+        Screen::Detail => "o open  ·  Esc/h back",
         Screen::Help => "Esc/h close",
     };
     let p = Paragraph::new(hints).style(theme::muted());
+    frame.render_widget(p, area);
+}
+
+/// Name/org/platform come straight from the selected `VtuberRow` — already
+/// held in `app.items`, no need to fetch them again. Only streams/clips are
+/// asynchronous, tracked by `detail_load` the same way the list screen
+/// tracks its own load with `load_state`.
+fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(row) = app.selected() else {
+        draw_message(frame, area, "No VTuber selected.");
+        return;
+    };
+
+    let mut lines = vec![
+        Line::styled(row.name.clone(), theme::name()),
+        Line::from(vec![
+            Span::styled("Platform: ", theme::muted()),
+            Span::raw(row.platform.clone()),
+        ]),
+    ];
+
+    if let Some(org) = &row.org {
+        let text = match &row.suborg {
+            Some(suborg) => format!("{org} / {suborg}"),
+            None => org.clone(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Org:      ", theme::muted()),
+            Span::raw(text),
+        ]));
+    }
+
+    lines.push(Line::raw(""));
+
+    match &app.detail_load {
+        LoadState::Loading => lines.push(Line::raw("Loading...")),
+        LoadState::Failed(msg) => lines.push(Line::raw(format!("Error: {msg}"))),
+        LoadState::Loaded => {
+            if let Some(detail) = &app.detail {
+                let is_live = detail.streams.iter().any(|s| s.status == "live");
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", theme::muted()),
+                    Span::styled(
+                        if is_live { "LIVE" } else { "offline" },
+                        theme::live_status(is_live),
+                    ),
+                ]));
+                lines.push(Line::raw(""));
+
+                lines.push(Line::styled("Recent streams:", theme::heading()));
+                if detail.streams.is_empty() {
+                    lines.push(Line::styled("  (none)", theme::muted()));
+                } else {
+                    for s in &detail.streams {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("[{}] ", s.status), theme::status_tag(&s.status)),
+                            Span::raw(s.title.clone()),
+                            Span::raw(" - "),
+                            Span::styled(s.url.clone(), theme::url()),
+                        ]));
+                    }
+                }
+                lines.push(Line::raw(""));
+
+                lines.push(Line::styled("Recent clips:", theme::heading()));
+                if detail.clips.is_empty() {
+                    lines.push(Line::styled("  (none)", theme::muted()));
+                } else {
+                    for c in &detail.clips {
+                        lines.push(Line::from(vec![
+                            Span::raw(c.title.clone()),
+                            Span::raw(" "),
+                            Span::styled(format!("({} views)", c.view_count), theme::muted()),
+                            Span::raw(" - "),
+                            Span::styled(c.url.clone(), theme::url()),
+                        ]));
+                    }
+                }
+            }
+        }
+    }
+
+    let block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
+    let p = Paragraph::new(lines).block(block);
     frame.render_widget(p, area);
 }
 
@@ -102,8 +200,9 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(&app.config_token),
         ]),
         Line::raw(""),
-        Line::styled("j/k, ↑/↓  move          ?      toggle this help", theme::muted()),
-        Line::styled("q         quit          Esc/h  close", theme::muted()),
+        Line::styled("j/k, ↑/↓  move          Enter  open detail", theme::muted()),
+        Line::styled("o         open browser  ?      toggle this help", theme::muted()),
+        Line::styled("q         quit          Esc/h  close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);

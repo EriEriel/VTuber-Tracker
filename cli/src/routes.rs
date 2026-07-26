@@ -316,7 +316,7 @@ pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, ApiError> {
     Ok(live)
 }
 
-async fn fetch_profile_url(id: &str) -> Result<String, ApiError> {
+pub(crate) async fn fetch_profile_url(id: &str) -> Result<String, ApiError> {
     let client = crate::config::client();
     let res = client
         .get(format!("{}/api/vtubers/{id}/profile-url", api_url()))

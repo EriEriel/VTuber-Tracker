@@ -10,18 +10,25 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use event::Command;
 use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use tokio::sync::mpsc;
 
-use crate::routes::ApiError;
+use crate::routes::{ApiError, VtuberDetail};
 
 /// What can arrive asynchronously and needs to update `App`. Grows with each
-/// later phase (a detail fetch, an action's outcome, an auto-refresh tick) —
-/// Phase 1 only needs the initial list load, so only that variant exists.
+/// later phase (an action's outcome, an auto-refresh tick) — Phase 2 adds
+/// the detail fetch and the one action (`o`) that can fail in a way with no
+/// screen of its own to show it.
 enum Message {
     Vtubers(Result<Vec<VtuberRow>, ApiError>),
+    Detail {
+        id: String,
+        result: Result<VtuberDetail, ApiError>,
+    },
+    ActionFailed(String),
 }
 
 /// Entry point called from clap's `Tui` subcommand handler in main.rs.
@@ -37,15 +44,19 @@ pub async fn run() -> anyhow::Result<()> {
     // actually rendered, since nothing drew a frame until the fetch had
     // already resolved. Spawning it means the first frame(s) can genuinely
     // show "Loading..." while it's in flight.
-    tokio::spawn(async move {
-        let _ = tx.send(Message::Vtubers(fetch_tracked_vtubers().await)).await;
-    });
+    spawn_fetch_vtubers(tx.clone());
 
-    let result = run_loop(&mut terminal, &mut app, rx).await;
+    let result = run_loop(&mut terminal, &mut app, tx, rx).await;
 
     restore_terminal(&mut terminal)?;
 
     result
+}
+
+fn spawn_fetch_vtubers(tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        let _ = tx.send(Message::Vtubers(fetch_tracked_vtubers().await)).await;
+    });
 }
 
 /// The render loop. This is the "immediate mode" core: draw, wait for
@@ -57,11 +68,15 @@ pub async fn run() -> anyhow::Result<()> {
 ///
 /// `select!` over crossterm's async `EventStream` and the message channel,
 /// rather than the old blocking `event::poll`: a blocking read stalls the
-/// whole tokio runtime, so nothing spawned (like the background fetch above)
-/// could ever make progress while waiting on a keypress.
+/// whole tokio runtime, so nothing spawned (like the background fetches this
+/// dispatches) could ever make progress while waiting on a keypress.
+///
+/// `tx` is threaded through for the whole loop, not just the startup fetch —
+/// `Enter`/`o` need to spawn their own background work as they happen.
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    tx: mpsc::Sender<Message>,
     mut rx: mpsc::Receiver<Message>,
 ) -> anyhow::Result<()> {
     let mut events = EventStream::new();
@@ -72,7 +87,11 @@ async fn run_loop(
         tokio::select! {
             maybe_event = events.next() => {
                 match maybe_event {
-                    Some(Ok(event)) => event::handle_event(app, event),
+                    Some(Ok(event)) => {
+                        if let Some(cmd) = event::handle_event(app, event) {
+                            dispatch(cmd, tx.clone());
+                        }
+                    }
                     Some(Err(err)) => return Err(err.into()),
                     // The stream ended (stdin closed) — nothing left to wait
                     // on; let the next loop check re-evaluate should_quit.
@@ -85,10 +104,43 @@ async fn run_loop(
     Ok(())
 }
 
+/// Turns a `Command` `handle_event` decided on into an actual background
+/// task. Split from `run_loop` because it's the one place allowed to know
+/// how each `Command` maps onto a `routes` call — `event::handle_event`
+/// deliberately doesn't import `routes` at all.
+fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
+    match cmd {
+        Command::FetchDetail(id) => {
+            tokio::spawn(async move {
+                let result = crate::routes::fetch_vtuber_detail(&id).await;
+                let _ = tx.send(Message::Detail { id, result }).await;
+            });
+        }
+        Command::OpenProfile(id) => {
+            tokio::spawn(async move {
+                match crate::routes::fetch_profile_url(&id).await {
+                    Ok(url) => {
+                        if let Err(err) = open::that(url) {
+                            let _ = tx
+                                .send(Message::ActionFailed(format!("could not open browser: {err}")))
+                                .await;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Message::ActionFailed(err.to_string())).await;
+                    }
+                }
+            });
+        }
+    }
+}
+
 fn handle_message(app: &mut App, message: Message) {
     match message {
         Message::Vtubers(Ok(rows)) => app.set_items(rows),
         Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
+        Message::Detail { id, result } => app.accept_detail(&id, result),
+        Message::ActionFailed(msg) => app.last_error = Some(msg),
     }
 }
 

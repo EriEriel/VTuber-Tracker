@@ -1,7 +1,8 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–1 implemented**, Phases 2–7 planned, Phase 8
-deferred. Branch `tui`.
+Status: **Phases 0–1 implemented**, Phase 2 in progress (core mapping done,
+reviewed by running; per-stream/clip URL opening added to scope, not yet
+implemented), Phases 3–7 planned, Phase 8 deferred. Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -256,14 +257,23 @@ the right backend URL; status bar visible; `q` still quits cleanly.
 
 # Phase 2 — Detail view and open in browser
 
-Maps `lookup`'s detail half and `jump`.
+Maps `lookup`'s detail half and `jump`. Core mapping **done**, reviewed by
+running; per-stream/clip URL opening (below) is scoped in but not yet built.
 
-- [ ] `Enter` → Detail screen via `fetch_vtuber_detail`, dispatched as a
+- [x] `Enter` → Detail screen via `fetch_vtuber_detail`, dispatched as a
       background task so the UI stays responsive
-- [ ] Shows name, org/suborg, platform, live status, recent streams (status tag
+- [x] Shows name, org/suborg, platform, live status, recent streams (status tag
       + title + URL), recent clips (title + view count)
-- [ ] `o` → `fetch_profile_url` + `open::that`, from list *and* detail
-- [ ] `Esc` / `h` → back
+- [x] `o` → `fetch_profile_url` + `open::that`, from list *and* detail
+- [x] `Esc` / `h` → back
+
+`Enter`'s background fetch guards against a stale response: if the user backs
+out and opens a *different* VTuber before the first fetch resolves, the late
+response's id no longer matches `App::pending_detail_id` and is dropped
+rather than overwriting the wrong detail screen. `o`'s failures (bad token, no
+browser handler) have no screen of their own to show on, so they surface in a
+new `last_error` status-bar field, cleared on the next action or screen
+change.
 
 **Thumbnails are deliberately excluded from this phase.** `viuer` cannot be
 used (see Traps). The options are `ratatui-image`, or halfblocks via the
@@ -271,8 +281,24 @@ used (see Traps). The options are `ratatui-image`, or halfblocks via the
 make the whole view look broken, so they get their own phase later rather than
 blocking the rest of the mapping. `cli/IMAGE_RENDERING.md` has background.
 
+### Open URL per stream/clip
+
+Not yet implemented. Mechanically lighter than the channel-`o` path above —
+`s.url`/`c.url` are already sitting in `app.detail` by the time Detail
+renders, so no new fetch is needed. The actual cost is that streams and clips
+currently render as static `Line`s in a `Paragraph`, with no selectable state
+at all.
+
+- [ ] Give streams and clips real selection (a `ListState`-backed `List`, not
+      static lines), plus a focus concept — between the two sub-lists, and
+      against the existing VTuber-level `o` — so a keypress knows which URL
+      it means
+- [ ] `o` (or a distinct key — TBD when this is built) opens the URL of
+      whichever stream/clip currently has focus
+
 **Review:** `Enter` shows correct streams/clips; `o` opens the right channel;
-`Esc` returns; display stays clean.
+`Esc` returns; display stays clean. (Per-stream/clip opening gets its own
+review pass once built.)
 
 ---
 
