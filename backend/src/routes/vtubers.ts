@@ -247,6 +247,11 @@ vtubersRoute.get('/api/vtubers/live', async (c) => {
         return {
           vtuber,
           stream: {
+            // externalId is the only stable per-stream identity here: `url` is
+            // constant across a Twitch streamer's streams, and startTime is
+            // refreshed on every markLive upsert. Clients diffing live state
+            // (`oshihub watch`) need a key that can't drift.
+            externalId: s.externalId,
             title: s.title,
             url: s.url,
             thumbnailUrl: s.thumbnailUrl,
