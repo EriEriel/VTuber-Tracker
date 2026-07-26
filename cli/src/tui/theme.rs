@@ -27,11 +27,6 @@ pub fn muted() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
-/// Section heading such as "Recent streams:". Mirrors `theme::heading`.
-pub fn heading() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
-}
-
 /// A URL — de-emphasised, since it's for copying rather than reading.
 /// Mirrors `theme::url`'s dimmed blue.
 pub fn url() -> Style {

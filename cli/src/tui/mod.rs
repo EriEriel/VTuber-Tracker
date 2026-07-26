@@ -119,19 +119,26 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
         Command::OpenProfile(id) => {
             tokio::spawn(async move {
                 match crate::routes::fetch_profile_url(&id).await {
-                    Ok(url) => {
-                        if let Err(err) = open::that(url) {
-                            let _ = tx
-                                .send(Message::ActionFailed(format!("could not open browser: {err}")))
-                                .await;
-                        }
-                    }
+                    Ok(url) => open_and_report(url, &tx).await,
                     Err(err) => {
                         let _ = tx.send(Message::ActionFailed(err.to_string())).await;
                     }
                 }
             });
         }
+        Command::OpenUrl(url) => {
+            tokio::spawn(async move {
+                open_and_report(url, &tx).await;
+            });
+        }
+    }
+}
+
+async fn open_and_report(url: String, tx: &mpsc::Sender<Message>) {
+    if let Err(err) = open::that(url) {
+        let _ = tx
+            .send(Message::ActionFailed(format!("could not open browser: {err}")))
+            .await;
     }
 }
 

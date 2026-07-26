@@ -6,8 +6,9 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, LoadState, Screen};
+use super::app::{App, DetailFocus, LoadState, Screen};
 use super::theme;
+use crate::routes::VtuberDetail;
 
 /// Pure render function: reads App, writes to the Frame, mutates nothing.
 /// This is the "immediate mode" part — every tick, we throw away the last
@@ -89,7 +90,7 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     let hints = match app.screen {
         Screen::List => "j/k move  ·  Enter detail  ·  o open  ·  ? help  ·  q quit",
-        Screen::Detail => "o open  ·  Esc/h back",
+        Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
         Screen::Help => "Esc/h close",
     };
     let p = Paragraph::new(hints).style(theme::muted());
@@ -100,13 +101,18 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
 /// held in `app.items`, no need to fetch them again. Only streams/clips are
 /// asynchronous, tracked by `detail_load` the same way the list screen
 /// tracks its own load with `load_state`.
+///
+/// Before a load resolves there's nothing to select yet, so the header is
+/// drawn alone over the full area. Once loaded, it shrinks to a fixed-height
+/// block and streams/clips render as real `List` widgets below it — that's
+/// what lets `o` open *one* of them rather than just linking to all of them.
 fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
     let Some(row) = app.selected() else {
         draw_message(frame, area, "No VTuber selected.");
         return;
     };
 
-    let mut lines = vec![
+    let mut header_lines = vec![
         Line::styled(row.name.clone(), theme::name()),
         Line::from(vec![
             Span::styled("Platform: ", theme::muted()),
@@ -119,65 +125,120 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
             Some(suborg) => format!("{org} / {suborg}"),
             None => org.clone(),
         };
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("Org:      ", theme::muted()),
             Span::raw(text),
         ]));
     }
 
-    lines.push(Line::raw(""));
-
-    match &app.detail_load {
-        LoadState::Loading => lines.push(Line::raw("Loading...")),
-        LoadState::Failed(msg) => lines.push(Line::raw(format!("Error: {msg}"))),
-        LoadState::Loaded => {
-            if let Some(detail) = &app.detail {
-                let is_live = detail.streams.iter().any(|s| s.status == "live");
-                lines.push(Line::from(vec![
-                    Span::styled("Status: ", theme::muted()),
-                    Span::styled(
-                        if is_live { "LIVE" } else { "offline" },
-                        theme::live_status(is_live),
-                    ),
-                ]));
-                lines.push(Line::raw(""));
-
-                lines.push(Line::styled("Recent streams:", theme::heading()));
-                if detail.streams.is_empty() {
-                    lines.push(Line::styled("  (none)", theme::muted()));
-                } else {
-                    for s in &detail.streams {
-                        lines.push(Line::from(vec![
-                            Span::styled(format!("[{}] ", s.status), theme::status_tag(&s.status)),
-                            Span::raw(s.title.clone()),
-                            Span::raw(" - "),
-                            Span::styled(s.url.clone(), theme::url()),
-                        ]));
-                    }
-                }
-                lines.push(Line::raw(""));
-
-                lines.push(Line::styled("Recent clips:", theme::heading()));
-                if detail.clips.is_empty() {
-                    lines.push(Line::styled("  (none)", theme::muted()));
-                } else {
-                    for c in &detail.clips {
-                        lines.push(Line::from(vec![
-                            Span::raw(c.title.clone()),
-                            Span::raw(" "),
-                            Span::styled(format!("({} views)", c.view_count), theme::muted()),
-                            Span::raw(" - "),
-                            Span::styled(c.url.clone(), theme::url()),
-                        ]));
-                    }
-                }
-            }
+    let detail = match &app.detail_load {
+        LoadState::Loading => {
+            header_lines.push(Line::raw("Loading..."));
+            None
         }
-    }
+        LoadState::Failed(msg) => {
+            header_lines.push(Line::raw(format!("Error: {msg}")));
+            None
+        }
+        LoadState::Loaded => app.detail.as_ref(),
+    };
 
-    let block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, area);
+    let Some(detail) = detail else {
+        let block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
+        frame.render_widget(Paragraph::new(header_lines).block(block), area);
+        return;
+    };
+
+    let is_live = detail.streams.iter().any(|s| s.status == "live");
+    header_lines.push(Line::from(vec![
+        Span::styled("Status: ", theme::muted()),
+        Span::styled(
+            if is_live { "LIVE" } else { "offline" },
+            theme::live_status(is_live),
+        ),
+    ]));
+
+    let chunks = Layout::vertical([
+        Constraint::Length(header_lines.len() as u16 + 2), // +2 for the block's borders
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .split(area);
+
+    let header_block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
+    frame.render_widget(Paragraph::new(header_lines).block(header_block), chunks[0]);
+
+    draw_stream_list(frame, chunks[1], detail, app);
+    draw_clip_list(frame, chunks[2], detail, app);
+}
+
+fn draw_stream_list(frame: &mut Frame, area: Rect, detail: &VtuberDetail, app: &App) {
+    let items: Vec<ListItem> = if detail.streams.is_empty() {
+        vec![ListItem::new(Line::styled("(none)", theme::muted()))]
+    } else {
+        detail
+            .streams
+            .iter()
+            .map(|s| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("[{}] ", s.status), theme::status_tag(&s.status)),
+                    Span::raw(s.title.clone()),
+                    Span::raw("  "),
+                    Span::styled(s.url.clone(), theme::url()),
+                ]))
+            })
+            .collect()
+    };
+
+    let list = focusable_list(items, " Recent streams ", app.detail_focus == DetailFocus::Streams);
+    let mut state = app.stream_state;
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_clip_list(frame: &mut Frame, area: Rect, detail: &VtuberDetail, app: &App) {
+    let items: Vec<ListItem> = if detail.clips.is_empty() {
+        vec![ListItem::new(Line::styled("(none)", theme::muted()))]
+    } else {
+        detail
+            .clips
+            .iter()
+            .map(|c| {
+                ListItem::new(Line::from(vec![
+                    Span::raw(c.title.clone()),
+                    Span::raw(" "),
+                    Span::styled(format!("({} views)", c.view_count), theme::muted()),
+                    Span::raw("  "),
+                    Span::styled(c.url.clone(), theme::url()),
+                ]))
+            })
+            .collect()
+    };
+
+    let list = focusable_list(items, " Recent clips ", app.detail_focus == DetailFocus::Clips);
+    let mut state = app.clip_state;
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// The unfocused pane still shows a selection (so `Tab` back to it lands
+/// somewhere sane) but without the reversed/bold highlight or a bright
+/// border — those are reserved for whichever pane `o` currently acts on.
+fn focusable_list<'a>(items: Vec<ListItem<'a>>, title: &str, focused: bool) -> List<'a> {
+    let border_style = if focused { Style::default() } else { theme::muted() };
+    let highlight_style = if focused {
+        Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+
+    List::new(items)
+        .block(
+            Block::default()
+                .title(title.to_string())
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        )
+        .highlight_style(highlight_style)
+        .highlight_symbol(if focused { "> " } else { "  " })
 }
 
 /// Doubles as `oshihub config`: same three facts (backend URL, where it
@@ -201,8 +262,9 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::raw(""),
         Line::styled("j/k, ↑/↓  move          Enter  open detail", theme::muted()),
-        Line::styled("o         open browser  ?      toggle this help", theme::muted()),
-        Line::styled("q         quit          Esc/h  close/back", theme::muted()),
+        Line::styled("o         open browser  Tab    switch pane (in detail)", theme::muted()),
+        Line::styled("q         quit          ?      toggle this help", theme::muted()),
+        Line::styled("Esc/h     close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);

@@ -8,7 +8,12 @@ use super::app::{App, Screen};
 /// it. Keeps this function a plain synchronous mutator, same as Phase 1.
 pub enum Command {
     FetchDetail(String),
+    /// Open a VTuber's channel: the URL isn't known yet, `routes` has to
+    /// resolve it first.
     OpenProfile(String),
+    /// Open an already-known URL — a focused stream/clip's, already sitting
+    /// in `app.detail`, so no fetch is needed before opening it.
+    OpenUrl(String),
 }
 
 /// Applies one already-read crossterm `Event` to `App`, returning a
@@ -39,15 +44,27 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Char('?') if app.screen != Screen::Detail => app.toggle_help(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::List => app.next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::List => app.previous(),
+        KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
+        KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
+        KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
         KeyCode::Enter if app.screen == Screen::List => {
             let id = app.selected().map(|row| row.id.clone())?;
             app.begin_detail(id.clone());
             return Some(Command::FetchDetail(id));
         }
-        KeyCode::Char('o') if matches!(app.screen, Screen::List | Screen::Detail) => {
+        // Contextual: on List, `o` opens the VTuber's channel (nothing else
+        // to open there). On Detail, it opens whichever stream/clip is
+        // currently focused instead — to open the channel from Detail, back
+        // out to List first and press `o` there.
+        KeyCode::Char('o') if app.screen == Screen::List => {
             let id = app.selected().map(|row| row.id.clone())?;
             app.last_error = None;
             return Some(Command::OpenProfile(id));
+        }
+        KeyCode::Char('o') if app.screen == Screen::Detail => {
+            let url = app.focused_url()?;
+            app.last_error = None;
+            return Some(Command::OpenUrl(url));
         }
         _ => {}
     }

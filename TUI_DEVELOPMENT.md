@@ -1,8 +1,7 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–1 implemented**, Phase 2 in progress (core mapping done,
-reviewed by running; per-stream/clip URL opening added to scope, not yet
-implemented), Phases 3–7 planned, Phase 8 deferred. Branch `tui`.
+Status: **Phases 0–2 implemented**, Phases 3–7 planned, Phase 8 deferred.
+Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -257,14 +256,15 @@ the right backend URL; status bar visible; `q` still quits cleanly.
 
 # Phase 2 — Detail view and open in browser
 
-Maps `lookup`'s detail half and `jump`. Core mapping **done**, reviewed by
-running; per-stream/clip URL opening (below) is scoped in but not yet built.
+Maps `lookup`'s detail half and `jump`. **Done**, reviewed by running.
 
 - [x] `Enter` → Detail screen via `fetch_vtuber_detail`, dispatched as a
       background task so the UI stays responsive
 - [x] Shows name, org/suborg, platform, live status, recent streams (status tag
       + title + URL), recent clips (title + view count)
-- [x] `o` → `fetch_profile_url` + `open::that`, from list *and* detail
+- [x] `o` → `fetch_profile_url` + `open::that` on the list screen. Contextual
+      inside Detail (see below) rather than always meaning "open the
+      channel" — a deliberate choice, not the originally planned behavior
 - [x] `Esc` / `h` → back
 
 `Enter`'s background fetch guards against a stale response: if the user backs
@@ -283,22 +283,29 @@ blocking the rest of the mapping. `cli/IMAGE_RENDERING.md` has background.
 
 ### Open URL per stream/clip
 
-Not yet implemented. Mechanically lighter than the channel-`o` path above —
-`s.url`/`c.url` are already sitting in `app.detail` by the time Detail
-renders, so no new fetch is needed. The actual cost is that streams and clips
-currently render as static `Line`s in a `Paragraph`, with no selectable state
-at all.
+**Done**, reviewed by running. Turned out mechanically lighter than the
+channel-`o` path above, as expected — `s.url`/`c.url` are already sitting in
+`app.detail` by the time Detail renders, so opening one needs no fetch, just
+`open::that` directly (`Command::OpenUrl`, alongside the existing
+`Command::OpenProfile` which still resolves a URL first).
 
-- [ ] Give streams and clips real selection (a `ListState`-backed `List`, not
-      static lines), plus a focus concept — between the two sub-lists, and
-      against the existing VTuber-level `o` — so a keypress knows which URL
-      it means
-- [ ] `o` (or a distinct key — TBD when this is built) opens the URL of
-      whichever stream/clip currently has focus
+- [x] Streams and clips are real `List` widgets (`App::stream_state`/
+      `clip_state`), not static lines. `Tab` switches focus between the two
+      panes; the focused one gets a bright border, reversed highlight, and
+      `>` marker, the unfocused one stays dim
+- [x] `o` is contextual inside Detail: opens whichever stream/clip currently
+      has focus, rather than the channel. To open the channel from Detail,
+      back out to List (`Esc`/`h`) and press `o` there — an explicit tradeoff
+      picked over adding a second "open" key, see `App::focused_url`
+- [x] `j`/`k`/arrows move within whichever pane has focus, sharing the same
+      wrap-around `cycle()` helper the main list's `next`/`previous` now also
+      use (four near-identical call sites collapsed into one function)
 
-**Review:** `Enter` shows correct streams/clips; `o` opens the right channel;
-`Esc` returns; display stays clean. (Per-stream/clip opening gets its own
-review pass once built.)
+**Review:** `Enter` shows correct streams/clips; `o` opens the right channel
+from List; `Tab` moves focus between streams/clips with a visible highlight
+change; `j`/`k` move and wrap within the focused pane; `o` inside Detail opens
+the focused stream/clip's URL; an empty pane's `Tab`/`j`/`k`/`o` all no-op
+instead of erroring; `Esc` returns; display stays clean.
 
 ---
 
