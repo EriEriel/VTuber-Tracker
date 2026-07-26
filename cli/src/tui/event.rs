@@ -101,14 +101,17 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         // to open there). On Detail, it opens whichever stream/clip is
         // currently focused instead — to open the channel from Detail, back
         // out to List first and press `o` there.
+        //
+        // No `begin_action()` here, unlike `s`/`d`/`a`: opening a browser
+        // isn't a mutation with a meaningful in-flight state to spin on, and
+        // the success path sends no message at all (see `open_and_report`),
+        // so a `pending` this incremented would never get decremented back.
         KeyCode::Char('o') if app.screen == Screen::List => {
             let id = app.selected().map(|row| row.id.clone())?;
-            app.begin_action();
             return Some(Command::OpenProfile(id));
         }
         KeyCode::Char('o') if app.screen == Screen::Detail => {
             let url = app.focused_url()?;
-            app.begin_action();
             return Some(Command::OpenUrl(url));
         }
         _ => {}

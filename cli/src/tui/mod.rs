@@ -258,7 +258,11 @@ fn handle_message(app: &mut App, message: Message) -> bool {
         Message::Detail { id, result } => app.accept_detail(&id, result),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),
-        Message::ActionFailed(msg) => app.end_action(Err(msg)),
+        // Not `end_action` — `o` never calls `begin_action` (see event.rs),
+        // so there's no pending count here to decrement. Doing so anyway
+        // would steal a decrement from an unrelated `s`/`d`/`a` action still
+        // in flight and end its spinner early.
+        Message::ActionFailed(msg) => app.status = Some(Err(msg)),
         Message::ActionDone(result) => {
             let refresh = result.is_ok();
             app.end_action(result);
