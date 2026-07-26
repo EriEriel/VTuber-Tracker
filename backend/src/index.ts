@@ -4,9 +4,9 @@ import { youtubeTestRoute } from './routes/youtube.test';
 import { twitchTestRoute } from './routes/twitch.test';
 import { vtubersRoute } from './routes/vtubers';
 import { syncRoute } from './routes/sync';
-import { authRoute } from './routes/auth';
+import { eventsubRoute } from './routes/eventsub';
 import { connectToDatabase } from './lib/db';
-import { startEventSubListener } from './lib/twitch-eventsub';
+import { initTwitchEventSub } from './lib/twitch-eventsub';
 import { requireApiToken, assertApiTokenConfigured } from './lib/require-api-token';
 
 assertApiTokenConfigured();
@@ -14,18 +14,18 @@ assertApiTokenConfigured();
 const app = new Hono();
 
 // Everything that touches the database or spends an external API quota sits
-// behind the shared secret. /auth/* is deliberately NOT covered: it's a
-// browser redirect flow (Twitch sends the user back to /auth/twitch/callback),
-// so it can't carry an Authorization header. Its safety rests on the callback
-// being useless without a valid Twitch-issued code — and on the fact that
-// initial authorization is meant to be done locally, not on the public host.
+// behind the shared secret. /eventsub/* is deliberately NOT covered: Twitch
+// calls that route directly and cannot carry our bearer token. Its safety
+// rests on HMAC signature verification (see routes/eventsub.ts) instead —
+// strictly better than the old /auth/* exemption, which only relied on the
+// callback being useless without a Twitch-issued code.
 app.use('/api/*', requireApiToken);
 app.use('/sync/*', requireApiToken);
 
 // Mount API routes
 app.route('/', vtubersRoute);
 app.route('/', syncRoute);
-app.route('/', authRoute);
+app.route('/', eventsubRoute);
 
 // Mount test routes
 app.route('/', holodexTestRoute);
@@ -48,7 +48,7 @@ try {
   // object again, on every restart of a restarting container.
   process.exit(1);
 }
-startEventSubListener();
+initTwitchEventSub();
 
 // Configurable so the container can be remapped without a rebuild; keeps
 // the previous hardcoded 3000 as the default for local dev.
