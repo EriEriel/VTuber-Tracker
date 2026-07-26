@@ -111,7 +111,7 @@ struct CreateVtuberChannel {
     channel_id: String,
 }
 
-fn parse_channel_url(url: &str) -> Result<(Platform, String), ApiError> {
+pub(crate) fn parse_channel_url(url: &str) -> Result<(Platform, String), ApiError> {
     let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let without_www = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
     let (host, path) = without_www
@@ -155,6 +155,20 @@ pub async fn create_vtuber_channel(url: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Deletes by id directly — the TUI already has the exact `VtuberChannel`
+/// selected, so it has no reason to go through a name lookup that could, in
+/// principle, match a different record than the one on screen.
+pub async fn delete_vtuber_channel_by_id(id: &str) -> Result<(), ApiError> {
+    let client = crate::config::client();
+    let res = client
+        .delete(format!("{}/api/vtubers/{}", api_url(), id))
+        .send()
+        .await?;
+
+    read_body(res).await?;
+    Ok(())
+}
+
 pub async fn delete_vtuber_channel(name: &str) -> Result<VtuberChannel, ApiError> {
     let vtubers = lookup_by_name(name).await?;
     let v = vtubers
@@ -162,13 +176,7 @@ pub async fn delete_vtuber_channel(name: &str) -> Result<VtuberChannel, ApiError
         .next()
         .ok_or_else(|| ApiError::Invalid(format!("No VTuber matching '{}' found", name)))?;
 
-    let client = crate::config::client();
-    let res = client
-        .delete(format!("{}/api/vtubers/{}", api_url(), v.id))
-        .send()
-        .await?;
-
-    read_body(res).await?;
+    delete_vtuber_channel_by_id(&v.id).await?;
     Ok(v)
 }
 
@@ -345,6 +353,28 @@ pub async fn jump_to(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn sync_path_for(source: Source) -> &'static str {
+    match source {
+        Source::Holodex => "holodex",
+        Source::Youtube_api => "youtube",
+        Source::Twitch_api => "twitch",
+    }
+}
+
+/// Syncs by id directly, same reasoning as `delete_vtuber_channel_by_id` —
+/// the TUI already knows exactly which record and which `source` it is.
+pub async fn sync_vtuber_channel_by_id(id: &str, source: Source) -> Result<(), ApiError> {
+    let sync_path = sync_path_for(source);
+    let client = crate::config::client();
+    let res = client
+        .post(format!("{}/api/sync/{sync_path}?id={id}&force=true", api_url()))
+        .send()
+        .await?;
+
+    read_body(res).await?;
+    Ok(())
+}
+
 pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), ApiError> {
     match name {
         Some(name) => {
@@ -353,19 +383,7 @@ pub async fn sync_vtuber_channels(name: Option<&str>) -> Result<(), ApiError> {
                 ApiError::Invalid(format!("VTuber channel {name} is not founded in database."))
             })?;
 
-            let sync_path = match v.source {
-                Source::Holodex => "holodex",
-                Source::Youtube_api => "youtube",
-                Source::Twitch_api => "twitch",
-            };
-
-            let client = crate::config::client();
-            let res = client
-                .post(format!("{}/api/sync/{sync_path}?id={}&force=true", api_url(), v.id))
-                .send()
-                .await?;
-
-            read_body(res).await?;
+            sync_vtuber_channel_by_id(&v.id, v.source).await?;
         }
         None => {
             let client = crate::config::client();

@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, DetailFocus, LoadState, Screen};
+use super::app::{App, DetailFocus, LoadState, ModalKind, Screen};
 use super::theme;
 use crate::routes::VtuberDetail;
 
@@ -18,19 +18,28 @@ use crate::routes::VtuberDetail;
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // The filter bar only makes sense over the list — Detail/Help keep the
-    // plain two-row layout regardless of whatever `/` last left behind.
-    let show_filter_bar =
-        app.screen == Screen::List && (app.filter_editing || !app.filter.is_empty());
+    // The filter bar only makes sense over the list (a modal opened from
+    // List still shows it underneath) — Detail/Help keep the plain layout
+    // regardless of whatever `/` last left behind.
+    let show_filter_bar = matches!(app.screen, Screen::List | Screen::Modal(_))
+        && (app.filter_editing || !app.filter.is_empty());
 
-    let (content_area, filter_area, status_area) = if show_filter_bar {
-        let chunks =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
-                .split(area);
-        (chunks[1], Some(chunks[0]), chunks[2])
+    // Activity (status/spinner) and hints are two separate fixed rows, not
+    // one row that swaps between them — a CRUD action's outcome used to
+    // blank out the key hints entirely while it was showing, which hid the
+    // very keys you'd want next. Now the hints are always visible, and
+    // activity gets its own line above them.
+    let constraints = if show_filter_bar {
+        vec![Constraint::Length(1), Constraint::Min(0), Constraint::Length(1), Constraint::Length(1)]
     } else {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
-        (chunks[0], None, chunks[1])
+        vec![Constraint::Min(0), Constraint::Length(1), Constraint::Length(1)]
+    };
+    let chunks = Layout::vertical(constraints).split(area);
+
+    let (filter_area, content_area, activity_area, hints_area) = if show_filter_bar {
+        (Some(chunks[0]), chunks[1], chunks[2], chunks[3])
+    } else {
+        (None, chunks[0], chunks[1], chunks[2])
     };
 
     if let Some(filter_area) = filter_area {
@@ -56,13 +65,42 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
     }
 
-    draw_status_bar(frame, status_area, app);
+    draw_activity_bar(frame, activity_area, app);
+    draw_hints_bar(frame, hints_area, app);
 
     // Overlaid last, on top of whatever's already drawn — closing it
     // returns to exactly what was underneath.
-    if app.screen == Screen::Help {
-        draw_help(frame, area, app);
+    match app.screen {
+        Screen::Help => draw_help(frame, area, app),
+        Screen::Modal(ModalKind::ConfirmDelete) => draw_confirm_delete(frame, area, app),
+        Screen::Modal(ModalKind::CreateUrl) => draw_create_url(frame, area, app),
+        _ => {}
     }
+}
+
+const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+
+/// Status/spinner only — separate from the hints row below it. While
+/// `pending > 0` this always wins (there's nothing meaningful in `status`
+/// yet; `end_action` only sets it once the action resolves), so the two
+/// never fight over the line.
+fn draw_activity_bar(frame: &mut Frame, area: Rect, app: &App) {
+    if app.pending > 0 {
+        let glyph = SPINNER_FRAMES[app.spinner_frame as usize % SPINNER_FRAMES.len()];
+        frame.render_widget(Paragraph::new(format!("{glyph} Working...")), area);
+        return;
+    }
+
+    if let Some(status) = &app.status {
+        let text = match status {
+            Ok(msg) => msg.clone(),
+            Err(msg) => format!("Error: {msg}"),
+        };
+        frame.render_widget(Paragraph::new(text), area);
+    }
+    // Nothing pending, no status — leave the row blank. Ratatui redraws
+    // from a fresh buffer every frame, so not rendering here is enough to
+    // clear whatever was on this line last frame.
 }
 
 /// A persistent `/query` line above the list, shown while editing (with a
@@ -124,28 +162,21 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
-    // An action failure (currently only `o`) has no screen of its own to
-    // show it on, so it takes over the status bar until the next action or
-    // screen change clears it.
-    if let Some(err) = &app.last_error {
-        let p = Paragraph::new(format!("Error: {err}"));
-        frame.render_widget(p, area);
-        return;
-    }
-
+fn draw_hints_bar(frame: &mut Frame, area: Rect, app: &App) {
     let hints = if app.filter_editing {
         "Type to filter  ·  Enter commit  ·  Esc clear  ·  ↑/↓ move"
     } else {
         match app.screen {
             Screen::List if app.live_only => {
-                "j/k move  ·  Enter detail  ·  o open  ·  / filter  ·  L show all  ·  ? help  ·  q quit"
+                "j/k move · Enter detail · o open · s sync · d delete · a add · / filter · L show all · ? help · q quit"
             }
             Screen::List => {
-                "j/k move  ·  Enter detail  ·  o open  ·  / filter  ·  L live only  ·  ? help  ·  q quit"
+                "j/k move · Enter detail · o open · s sync · d delete · a add · / filter · L live only · ? help · q quit"
             }
             Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
             Screen::Help => "Esc/h close",
+            Screen::Modal(ModalKind::ConfirmDelete) => "y / Enter confirm  ·  n / Esc cancel",
+            Screen::Modal(ModalKind::CreateUrl) => "Enter create  ·  Esc cancel",
         }
     };
     let p = Paragraph::new(hints).style(theme::muted());
@@ -319,13 +350,57 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::styled("j/k, ↑/↓  move          Enter  open detail", theme::muted()),
         Line::styled("o         open browser  Tab    switch pane (in detail)", theme::muted()),
         Line::styled("L         live only      /      filter by name", theme::muted()),
-        Line::styled("q         quit          ?      toggle this help", theme::muted()),
-        Line::styled("Esc/h     close/back", theme::muted()),
+        Line::styled("s         sync selected  d      delete selected (confirms)", theme::muted()),
+        Line::styled("a         add from URL   q      quit", theme::muted()),
+        Line::styled("?         toggle this help  Esc/h  close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);
     let p = Paragraph::new(lines).block(block);
     frame.render_widget(p, popup);
+}
+
+/// Re-derives the name from `app.selected()` rather than storing a snapshot
+/// on `App` — see `event::handle_modal`'s comment: modal input is exclusive,
+/// so selection can't drift while this is open, and this way the prompt and
+/// the delete it confirms are guaranteed to name the same VTuber.
+fn draw_confirm_delete(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(50, 20, area);
+    frame.render_widget(Clear, popup);
+
+    let name = app.selected().map(|row| row.name.as_str()).unwrap_or("this VTuber");
+    let lines = vec![
+        Line::raw(format!("Delete {name}?")),
+        Line::raw(""),
+        Line::styled("This also deletes its streams, clips, and snapshots.", theme::muted()),
+        Line::raw(""),
+        Line::styled("y / Enter  confirm      n / Esc  cancel", theme::muted()),
+    ];
+
+    let block = Block::default().title(" Confirm delete ").borders(Borders::ALL);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
+fn draw_create_url(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(60, 25, area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![Line::from(vec![
+        Span::raw("URL: "),
+        Span::raw(&app.create_input),
+        Span::raw("▏"),
+    ])];
+
+    if let Some(err) = &app.create_error {
+        lines.push(Line::raw(""));
+        lines.push(Line::raw(format!("Error: {err}")));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("Enter  create      Esc  cancel", theme::muted()));
+
+    let block = Block::default().title(" Add VTuber from URL ").borders(Borders::ALL);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 /// Standard ratatui popup pattern: carve a centred `percent_x` × `percent_y`

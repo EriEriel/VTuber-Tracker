@@ -14,13 +14,16 @@ use event::Command;
 use futures_util::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::routes::{ApiError, LiveEntry, VtuberDetail};
 
 /// What can arrive asynchronously and needs to update `App`. Grows with each
-/// later phase (an auto-refresh tick) — Phase 3 adds the live-vtubers fetch,
-/// dispatched alongside the list fetch at startup.
+/// later phase (an auto-refresh tick) — Phase 5 adds `ActionDone` for the
+/// three mutating actions, distinct from `ActionFailed` because a
+/// successful mutation also needs to trigger a list refresh and a failed
+/// `o` never does.
 enum Message {
     Vtubers(Result<Vec<VtuberRow>, ApiError>),
     Detail {
@@ -29,6 +32,7 @@ enum Message {
     },
     Live(Result<Vec<LiveEntry>, ApiError>),
     ActionFailed(String),
+    ActionDone(Result<String, String>),
 }
 
 /// Entry point called from clap's `Tui` subcommand handler in main.rs.
@@ -94,6 +98,12 @@ async fn run_loop(
     mut rx: mpsc::Receiver<Message>,
 ) -> anyhow::Result<()> {
     let mut events = EventStream::new();
+    // Only drives the `o`/`s`/`d`/`a` spinner — gated by `if app.pending > 0`
+    // below, so it's never even polled while nothing's in flight. `Interval`
+    // only advances when polled, so pausing it this way doesn't cause a
+    // burst of catch-up ticks when it resumes; the first tick after a pause
+    // just fires immediately, which is harmless.
+    let mut spinner_tick = tokio::time::interval(Duration::from_millis(120));
 
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
@@ -112,7 +122,18 @@ async fn run_loop(
                     None => {}
                 }
             }
-            Some(message) = rx.recv() => handle_message(app, message),
+            Some(message) = rx.recv() => {
+                // A successful sync/delete/create leaves the list stale —
+                // `handle_message` reports that back as a bool rather than
+                // taking `tx` itself, so it stays a plain `&mut App`
+                // mutator like every other message handler here.
+                if handle_message(app, message) {
+                    spawn_fetch_vtubers(tx.clone());
+                }
+            }
+            _ = spinner_tick.tick(), if app.pending > 0 => {
+                app.advance_spinner();
+            }
         }
     }
     Ok(())
@@ -145,6 +166,33 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
                 open_and_report(url, &tx).await;
             });
         }
+        Command::Sync { id, source, name } => {
+            tokio::spawn(async move {
+                let result = crate::routes::sync_vtuber_channel_by_id(&id, source)
+                    .await
+                    .map(|()| format!("Synced {name}"))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Message::ActionDone(result)).await;
+            });
+        }
+        Command::Delete { id, name } => {
+            tokio::spawn(async move {
+                let result = crate::routes::delete_vtuber_channel_by_id(&id)
+                    .await
+                    .map(|()| format!("Deleted {name}"))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Message::ActionDone(result)).await;
+            });
+        }
+        Command::Create(url) => {
+            tokio::spawn(async move {
+                let result = crate::routes::create_vtuber_channel(&url)
+                    .await
+                    .map(|()| format!("Created VTuber from {url}"))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Message::ActionDone(result)).await;
+            });
+        }
     }
 }
 
@@ -156,15 +204,24 @@ async fn open_and_report(url: String, tx: &mpsc::Sender<Message>) {
     }
 }
 
-fn handle_message(app: &mut App, message: Message) {
+/// Returns whether this message means the list is now stale and should be
+/// re-fetched — only true for a *successful* `ActionDone`, since that's the
+/// only case that actually changed backend data.
+fn handle_message(app: &mut App, message: Message) -> bool {
     match message {
         Message::Vtubers(Ok(rows)) => app.set_items(rows),
         Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
         Message::Detail { id, result } => app.accept_detail(&id, result),
         Message::Live(Ok(entries)) => app.set_live(entries),
-        Message::Live(Err(e)) => app.last_error = Some(e.to_string()),
-        Message::ActionFailed(msg) => app.last_error = Some(msg),
+        Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),
+        Message::ActionFailed(msg) => app.end_action(Err(msg)),
+        Message::ActionDone(result) => {
+            let refresh = result.is_ok();
+            app.end_action(result);
+            return refresh;
+        }
     }
+    false
 }
 
 /// Enter raw mode + alternate screen. Raw mode hands every keypress

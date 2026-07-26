@@ -33,7 +33,9 @@ pub enum Platform {
     Twitch,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Copy: every variant is unit-like, so this costs nothing and lets callers
+// (the TUI's Command::Sync in particular) pass it around without cloning.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[allow(non_camel_case_types)]
 pub enum Source {

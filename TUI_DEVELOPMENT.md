@@ -1,6 +1,6 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–4 implemented**, Phases 5–7 planned, Phase 8 deferred.
+Status: **Phases 0–5 implemented**, Phases 6–7 planned, Phase 8 deferred.
 Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -388,23 +388,55 @@ empty list.
 # Phase 5 — Actions: sync, delete, create
 
 Maps `sync`, `delete`, `create`. **First phase that mutates the shared
-production database.**
+production database.** **Done**, reviewed by running.
 
-- [ ] `s` → sync selected, as a background task with status feedback. Pick the
-      sync path from `source` exactly as `main.rs` does: `holodex` → `holodex`,
-      `youtube_api` → `youtube`, `twitch_api` → `twitch`
-- [ ] `d` → **confirm modal naming the VTuber**, then delete
-- [ ] `a` → URL input modal; make `parse_channel_url` `pub(crate)` and reuse it
-      so validation matches the CLI exactly, showing parse errors inline before
-      sending
-- [ ] All three refresh the list on success
+- [x] `s` → sync selected, as a background task with status feedback. Picks
+      the sync path from `source` via a new `routes::sync_vtuber_channel_by_id`
+      (and `delete_vtuber_channel_by_id`) — the TUI already has the exact
+      record selected, so both mutate by id directly rather than going
+      through the CLI's name-based lookup, which the name-based functions
+      now call into instead of duplicating
+- [x] `d` → **confirm modal naming the VTuber**, then delete
+- [x] `a` → URL input modal; `parse_channel_url` is now `pub(crate)` and
+      reused so validation matches the CLI exactly, with parse errors shown
+      inline *before* anything is dispatched — a guaranteed-fail URL never
+      spawns a task
+- [x] All three refresh the list on success (`Message::ActionDone`; a
+      successful result signals `run_loop` to re-`spawn_fetch_vtubers`)
 
 The delete confirmation is mandatory, not polish. A stray keypress in a TUI is
 far easier than mistyping `oshihub delete <name>`, and the backend cascades the
 delete to streams, clips, and snapshots.
 
+`Screen::Modal(ModalKind)` finally gets its real construction sites
+(`ConfirmDelete`, `CreateUrl`). Modal input is exclusive — `event.rs`
+short-circuits on `Screen::Modal(_)` before the normal keymap, same
+reasoning as `filter_editing`, so a stray `q` can't slip through and quit
+under an open modal. The confirm-delete modal re-derives the VTuber from
+`app.selected()` at confirm time rather than snapshotting when it opened;
+since input is exclusive, selection can't drift while it's open, so the
+prompt text and the delete it fires are guaranteed to name the same VTuber
+by construction.
+
+**Post-review adjustments**, both from user feedback after the initial pass:
+- Action outcomes used to take over the *entire* bottom row, hiding the key
+  hints exactly when you'd want them. Split into two permanent rows: an
+  activity line (status/spinner) and a hints line that's now always visible.
+- No visual cue existed for `o`/`s`/`d`/`a` while in flight. Added
+  `App.pending: u32` (a counter, not a bool, so a second action dispatched
+  before the first resolves can't let that first completion hide the
+  spinner too early) driving a `|/-\` glyph, advanced by a `tokio::select!`
+  branch gated on `if app.pending > 0` — never even polled while nothing's
+  running, so it's free at rest.
+
+**Known issue, logged not fixed** (see Phase 7's note and Known gaps below):
+live badges don't update after startup, so a VTuber created already-live
+won't show `LIVE` until the TUI restarts, even after a manual `s` corrects
+the backend's own data.
+
 **Review:** sync a VTuber; create one from a real URL; delete it again and
-confirm the modal blocks an accidental `d`.
+confirm the modal blocks an accidental `d`; spinner and hints both visible
+throughout each action.
 
 ---
 
@@ -436,6 +468,18 @@ Maps `watch`.
 
 `apply` is pure, has 17 existing tests, and encodes both load-bearing rules
 from Traps. Do not reimplement either.
+
+**Confirmed missing, not just theoretical:** creating a VTuber who's already
+live on Twitch doesn't show a `LIVE` badge until the TUI is restarted, even
+after a manual `s` sync makes the backend's own live data correct. Traced to
+`tui/mod.rs`: `spawn_fetch_live` only runs once, at `run()`'s startup
+(`mod.rs:52`); the post-action refresh after a successful `s`/`d`/`a`
+(`mod.rs:131`) only calls `spawn_fetch_vtubers`, never `spawn_fetch_live`. So
+`App.live_ids` is populated exactly once per session and never again —
+nothing currently re-fetches `/api/vtubers/live` while the TUI sits open,
+regardless of what changes on the backend. This phase's ticker is the
+intended fix; logged here rather than patched ad hoc so it lands as part of
+the real refresh mechanism instead of a one-off re-fetch bolted onto Phase 5.
 
 **Polling, not SSE.** `CLAUDE.md` and `Todo.md` record this reversal: polling
 won because this runs on a laptop, and a pushed event fired while the lid is
@@ -474,5 +518,11 @@ is the harder one, not the data. Out of scope until Phase 7 lands.
   halfblocks decision (Phase 2).
 - The TUI filters on `isTracked` where `oshihub list` does not. The counts
   happen to match today because everything in the database is tracked.
+- Live badges go stale for the life of a TUI session — `fetch_live_vtubers`
+  only runs once, at startup. A VTuber that goes live afterward (or is
+  `a`-created already live) won't show `LIVE` until the TUI restarts, even
+  after a manual `s` sync corrects the backend's own data. Confirmed live
+  against a real Twitch VTuber, not theoretical. Fix is Phase 7's ticker,
+  not a standalone patch — see that phase's note for the exact trace.
 - No lock, same as `watch` — nothing stops two TUI instances polling
   independently once Phase 7 lands.

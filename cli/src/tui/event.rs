@@ -1,6 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use super::app::{App, Screen};
+use super::app::{App, ModalKind, Screen};
+use crate::models::Source;
 
 /// Background work an event decided to kick off. `handle_event` only
 /// *describes* the intent — `mod.rs` is the one holding the channel `Sender`
@@ -14,6 +15,12 @@ pub enum Command {
     /// Open an already-known URL — a focused stream/clip's, already sitting
     /// in `app.detail`, so no fetch is needed before opening it.
     OpenUrl(String),
+    Sync { id: String, source: Source, name: String },
+    Delete { id: String, name: String },
+    /// Already validated by `App::try_submit_create` — `routes` still
+    /// re-parses it (it's the only thing that knows how to build the
+    /// request body), but a guaranteed-bad URL never reaches here.
+    Create(String),
 }
 
 /// Applies one already-read crossterm `Event` to `App`, returning a
@@ -40,10 +47,21 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         return None;
     }
 
+    // Same reasoning as filter-edit mode: a modal owns every keypress while
+    // it's open (the create-URL modal is a text field; even the confirm
+    // modal shouldn't let `q` slip through and quit under a stray keypress).
+    if let Screen::Modal(kind) = app.screen {
+        return handle_modal(app, kind, key.code);
+    }
+
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Esc => match app.screen {
-            Screen::Help | Screen::Detail => app.go_back_to_list(),
+            // `Screen::Modal(_)` never actually reaches this arm — the
+            // short-circuit above handles it — but `Screen` still has to be
+            // matched exhaustively, and this is the sane fallback if that
+            // invariant ever changes.
+            Screen::Help | Screen::Detail | Screen::Modal(_) => app.go_back_to_list(),
             Screen::List => app.should_quit = true,
         },
         KeyCode::Char('h') if app.screen != Screen::List => app.go_back_to_list(),
@@ -55,6 +73,17 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::List => app.previous(),
         KeyCode::Char('L') if app.screen == Screen::List => app.toggle_live_only(),
         KeyCode::Char('/') if app.screen == Screen::List => app.start_filter_edit(),
+        KeyCode::Char('s') if app.screen == Screen::List => {
+            let row = app.selected()?;
+            let (id, source, name) = (row.id.clone(), row.source, row.name.clone());
+            app.begin_action();
+            return Some(Command::Sync { id, source, name });
+        }
+        KeyCode::Char('d') if app.screen == Screen::List => {
+            app.selected()?;
+            app.open_confirm_delete();
+        }
+        KeyCode::Char('a') if app.screen == Screen::List => app.open_create_url(),
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
         KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
@@ -69,12 +98,12 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         // out to List first and press `o` there.
         KeyCode::Char('o') if app.screen == Screen::List => {
             let id = app.selected().map(|row| row.id.clone())?;
-            app.last_error = None;
+            app.begin_action();
             return Some(Command::OpenProfile(id));
         }
         KeyCode::Char('o') if app.screen == Screen::Detail => {
             let url = app.focused_url()?;
-            app.last_error = None;
+            app.begin_action();
             return Some(Command::OpenUrl(url));
         }
         _ => {}
@@ -95,5 +124,48 @@ fn handle_filter_edit(app: &mut App, code: KeyCode) {
         KeyCode::Down => app.next(),
         KeyCode::Up => app.previous(),
         _ => {}
+    }
+}
+
+fn handle_modal(app: &mut App, kind: ModalKind, code: KeyCode) -> Option<Command> {
+    match kind {
+        // Re-derives from `app.selected()` at confirm time rather than
+        // snapshotting when the modal opened: since modal input is
+        // exclusive, selection can't drift while it's open, and this way
+        // the confirmation text and the delete it fires are guaranteed to
+        // agree on which VTuber, by construction.
+        ModalKind::ConfirmDelete => match code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let row = app.selected()?;
+                let (id, name) = (row.id.clone(), row.name.clone());
+                app.go_back_to_list();
+                app.begin_action();
+                Some(Command::Delete { id, name })
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.go_back_to_list();
+                None
+            }
+            _ => None,
+        },
+        ModalKind::CreateUrl => match code {
+            KeyCode::Char(c) => {
+                app.create_input.push(c);
+                app.create_error = None;
+                None
+            }
+            KeyCode::Backspace => {
+                app.create_input.pop();
+                None
+            }
+            KeyCode::Enter => app.try_submit_create().map(Command::Create),
+            KeyCode::Esc => {
+                app.create_input.clear();
+                app.create_error = None;
+                app.go_back_to_list();
+                None
+            }
+            _ => None,
+        },
     }
 }

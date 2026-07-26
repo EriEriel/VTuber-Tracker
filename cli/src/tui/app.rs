@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use ratatui::widgets::ListState;
 
 use crate::config::{self, ConfigSource};
-use crate::models::{Platform, VtuberChannel};
+use crate::models::{Platform, Source, VtuberChannel};
 use crate::routes::{LiveEntry, VtuberDetail};
 
 /// Minimal shape for what the list *and* detail screens need.
@@ -17,6 +17,9 @@ pub struct VtuberRow {
     pub platform: String, // "YouTube" | "Twitch" | "Holodex" etc.
     pub org: Option<String>,
     pub suborg: Option<String>,
+    /// Which upstream API to sync through — `s` needs this to pick the right
+    /// `/api/sync/{path}` without a redundant name-based lookup.
+    pub source: Source,
 }
 
 /// Takes `&VtuberChannel` rather than owning one: the caller already has a
@@ -45,6 +48,7 @@ impl From<&VtuberChannel> for VtuberRow {
             },
             org: channel.org.clone(),
             suborg: channel.suborg.clone(),
+            source: channel.source,
         }
     }
 }
@@ -64,16 +68,26 @@ pub enum DetailFocus {
     Clips,
 }
 
-/// Which screen is on top. `Help` overlays whatever `load_state` is
-/// currently rendering underneath, rather than replacing it — closing the
-/// overlay returns to exactly what was there before. `Detail` and `Help` are
-/// both only ever reached from `List` and both return straight to it — no
-/// stack, since nothing yet needs one (that's Phase 5's modals).
+/// Which screen is on top. `Help`/`Modal` overlay whatever `load_state` is
+/// currently rendering underneath, rather than replacing it — closing them
+/// returns to exactly what was there before. All three of `Detail`/`Help`/
+/// `Modal` are only ever reached from `List` and return straight to it — no
+/// stack, since nothing yet needs one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     List,
     Detail,
     Help,
+    Modal(ModalKind),
+}
+
+/// `d` and `a` both need exclusive keyboard focus the same way `/` does —
+/// `event.rs` short-circuits on `Screen::Modal(_)` before the normal keymap,
+/// same reasoning as `filter_editing`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalKind {
+    ConfirmDelete,
+    CreateUrl,
 }
 
 pub struct App {
@@ -119,11 +133,29 @@ pub struct App {
     /// is filter text, not a command, which is why `q`/`L`/etc. all need to
     /// keep working normally as soon as this goes back to `false`.
     pub filter_editing: bool,
-    /// Last background-action failure (currently only `o`'s open-in-browser),
-    /// shown in the status bar until the next action or screen change clears
-    /// it. Unlike a list/detail load failure, an action failure has no
-    /// screen of its own to replace, so it has to surface somewhere.
-    pub last_error: Option<String>,
+    /// `a`'s in-progress URL text, and the parse error to show inline if
+    /// `parse_channel_url` rejects it — validated *before* anything is sent,
+    /// per the same rule `create_vtuber_channel` already follows.
+    pub create_input: String,
+    pub create_error: Option<String>,
+    /// Outcome of the last background action — `o`'s open-in-browser, or
+    /// Phase 5's `s`/`d`/`a` — shown in the status bar until the next action
+    /// or screen change clears it. One field rather than a separate
+    /// success/failure pair: with two `Option`s it's possible for both to be
+    /// `Some` at once and something has to arbitrate which wins, whereas one
+    /// `Option<Result<..>>` makes that structurally impossible. Unlike a
+    /// list/detail load failure, an action outcome has no screen of its own
+    /// to show it on, so it has to surface here.
+    pub status: Option<Result<String, String>>,
+    /// How many `o`/`s`/`d`/`a` actions are currently in flight. A counter
+    /// rather than a bool: dispatching a second action before the first
+    /// resolves must not let that first completion turn the spinner off
+    /// while the second is still running.
+    pub pending: u32,
+    /// Advanced once per spinner tick while `pending > 0` (`mod.rs`'s
+    /// `run_loop`). Just a counter — `ui.rs` owns the actual glyphs, same
+    /// separation of concerns as the platform-casing comment above.
+    pub spinner_frame: u32,
 }
 
 impl App {
@@ -153,8 +185,25 @@ impl App {
             live_only: false,
             filter: String::new(),
             filter_editing: false,
-            last_error: None,
+            create_input: String::new(),
+            create_error: None,
+            status: None,
+            pending: 0,
+            spinner_frame: 0,
         }
+    }
+
+    pub fn begin_action(&mut self) {
+        self.pending += 1;
+    }
+
+    pub fn end_action(&mut self, result: Result<String, String>) {
+        self.pending = self.pending.saturating_sub(1);
+        self.status = Some(result);
+    }
+
+    pub fn advance_spinner(&mut self) {
+        self.spinner_frame = self.spinner_frame.wrapping_add(1);
     }
 
     pub fn toggle_help(&mut self) {
@@ -245,7 +294,7 @@ impl App {
 
     pub fn go_back_to_list(&mut self) {
         self.screen = Screen::List;
-        self.last_error = None;
+        self.status = None;
     }
 
     pub fn begin_detail(&mut self, id: String) {
@@ -256,7 +305,39 @@ impl App {
         self.detail_focus = DetailFocus::Streams;
         self.stream_state = ListState::default();
         self.clip_state = ListState::default();
-        self.last_error = None;
+        self.status = None;
+    }
+
+    pub fn open_confirm_delete(&mut self) {
+        self.status = None;
+        self.screen = Screen::Modal(ModalKind::ConfirmDelete);
+    }
+
+    pub fn open_create_url(&mut self) {
+        self.status = None;
+        self.create_input.clear();
+        self.create_error = None;
+        self.screen = Screen::Modal(ModalKind::CreateUrl);
+    }
+
+    /// Validates `create_input` via the same `parse_channel_url` the actual
+    /// request will use, *before* anything is dispatched — a guaranteed-fail
+    /// URL shouldn't cost a spawned task and a round trip to find out.
+    /// `Some(url)` on success (and closes the modal); `None` leaves it open
+    /// with `create_error` set to show inline.
+    pub fn try_submit_create(&mut self) -> Option<String> {
+        match crate::routes::parse_channel_url(&self.create_input) {
+            Ok(_) => {
+                self.create_error = None;
+                self.go_back_to_list();
+                self.begin_action();
+                Some(std::mem::take(&mut self.create_input))
+            }
+            Err(e) => {
+                self.create_error = Some(e.to_string());
+                None
+            }
+        }
     }
 
     /// Applies a detail fetch's result, unless it's for a VTuber the user
