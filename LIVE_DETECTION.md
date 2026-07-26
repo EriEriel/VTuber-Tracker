@@ -11,10 +11,11 @@ Covers three pieces of work that look separate but share a spine:
 Phase 0 is a prerequisite for both. Phases 1 and 2 are independent of each
 other and can be done in either order.
 
-> **`TWITCH_EVENTSUB.md` is superseded by Phase 1.** It argues *for* websocket
-> transport, on the grounds that webhooks need a public HTTPS callback we
-> didn't have. We have one now. Don't follow that doc for transport choice;
-> its EventSub *protocol* detail is still accurate and useful.
+> **`TWITCH_EVENTSUB.md` has since been rewritten around Phase 1's outcome**
+> and now documents the webhook integration as it actually runs. Read it for
+> how Twitch EventSub works *here*; read this doc for why it changed. Its
+> appendix keeps the websocket-era lessons (the user-token requirement, the
+> `4003 "connection unused"` trap) for anyone tempted to go back.
 
 ---
 
