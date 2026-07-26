@@ -110,6 +110,8 @@ Reference docs: [`TWITCH_EVENTSUB.md`](TWITCH_EVENTSUB.md) and [`YOUTUBE_LIVE.md
 
 ## CLI (`oshihub`)
 
+![oshihub list and oshihub lookup, with an inline thumbnail](asset/cli-lookup.png)
+
 ### Commands
 
 | Command | Alias | Description |
@@ -211,6 +213,8 @@ oshihub tui
 
 A full-screen `ratatui` interface over the same backend the one-shot commands use — **v0.1 complete**: main list, detail view (streams/clips), live badges that auto-refresh in place, incremental search/filter, and sync/delete/create/edit, all without leaving the terminal. It's a second front end alongside the one-shot commands above, not a replacement for them.
 
+![Main list — tracked VTubers with a live badge](asset/tui-list.png)
+
 ```
 j / k / ↓ / ↑   move            Enter   detail view
 /               filter          o       open channel in browser / stream
@@ -221,6 +225,17 @@ q               quit            e       edit selected
 ```
 
 Live badges refresh on their own, on the same `watch_interval_secs` config `oshihub watch` uses — a VTuber going live mid-session picks up the badge within one interval, no restart or manual `s` needed, and briefly highlights to show it's new.
+
+<table>
+<tr>
+<td><img src="asset/tui-detail.png" alt="Detail view — streams and clips, Tab switches panes"></td>
+<td><img src="asset/tui-edit.png" alt="Edit modal — e opens a prefilled form over every mutable field"></td>
+</tr>
+<tr>
+<td align="center"><sub>Detail — streams/clips, <code>Tab</code> switches panes</sub></td>
+<td align="center"><sub><code>e</code> — edit modal</sub></td>
+</tr>
+</table>
 
 Thumbnails aren't rendered inside the TUI yet — `viuer` writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame; see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md) for the full phase-by-phase design history and the trap notes. A dashboard/charts screen (Phase 8) is planned but deferred.
 
