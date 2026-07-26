@@ -1,6 +1,6 @@
 # TUI development — plan and running checklist
 
-Status: **Phase 0 (list view) implemented**, Phases 1–7 planned, Phase 8
+Status: **Phases 0–1 implemented**, Phases 2–7 planned, Phase 8
 deferred. Branch `tui`.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
@@ -168,17 +168,22 @@ Shape notes worth knowing before modelling anything:
 
 # Phase 1 — Foundation
 
-No new features. Everything after it depends on all three parts.
+**Done**, reviewed by running. No new features of its own — everything after
+it depends on all three parts.
 
 ### 1a. Migrate `routes.rs` to `ApiError`
 
-- [ ] `fetch_vtubers`, `fetch_vtuber_detail`, `fetch_profile_url`,
+- [x] `fetch_vtubers`, `fetch_vtuber_detail`, `fetch_profile_url`,
       `lookup_by_name`, `create_vtuber_channel`, `delete_vtuber_channel`,
-      `sync_vtuber_channels` return `Result<_, ApiError>`
-- [ ] Split the `println!` out of the three mutating functions — they should
-      return an outcome and let `main.rs` print it, since the TUI needs the
-      result, not stdout text
-- [ ] Drop the `map_err(|e| anyhow!("{e}"))` bridge in `tui/mod.rs`
+      `sync_vtuber_channels` return `Result<_, ApiError>`. Also added
+      `ApiError::Invalid(String)` for local validation failures (a bad URL, a
+      name matching nothing) that never reach the network, so
+      `parse_channel_url` and the "no VTuber found" paths stay on the same
+      error type instead of a second one.
+- [x] Split the `println!` out of the three mutating functions — they return
+      an outcome (`delete_vtuber_channel` now returns the deleted
+      `VtuberChannel`) and `main.rs` prints it
+- [x] Drop the `map_err(|e| anyhow!("{e}"))` bridge in `tui/mod.rs`
 
 `main.rs` keeps compiling unchanged: `?` still converts `ApiError` into
 `Box<dyn Error>` via the blanket `From` impl. Side benefit — the TUI can now
@@ -188,39 +193,63 @@ Debug dumps on an unreachable backend.
 
 ### 1b. Async event loop
 
-- [ ] Enable `features = ["event-stream"]` on crossterm
-- [ ] Replace blocking `event::poll` with `tokio::select!` over
+- [x] Enable `features = ["event-stream"]` on crossterm (plus a new
+      `futures-util` dependency for `StreamExt`, needed to call `.next()` on
+      `EventStream`)
+- [x] Replace blocking `event::poll` with `tokio::select!` over
       `EventStream` and an `mpsc::Receiver<Message>`
-- [ ] `run_loop` becomes `async`
+- [x] `run_loop` becomes `async`
+
+The initial vtuber fetch also moved from a blocking pre-loop `await` into a
+task spawned onto the channel — not just plumbing-for-its-own-sake: with the
+blocking version, `LoadState::Loading` was set but the fetch always resolved
+before the first frame drew, so it could never actually render. Spawning it
+means "Loading tracked VTubers..." now has a real chance to show.
+
+`Message` only has the one variant this phase needs:
 
 ```rust
 enum Message {
     Vtubers(Result<Vec<VtuberRow>, ApiError>),
-    Detail(Box<Result<VtuberDetail, ApiError>>),
-    ActionDone { what: String, result: Result<(), ApiError> },
-    Tick,
 }
 ```
+
+`Detail`, `ActionDone`, and `Tick` are deferred to Phases 2, 5, and 7 —
+this is a *binary* crate, so `cargo build`'s dead-code lint fires on any
+unreachable item regardless of `pub`, unlike in a library crate. Add each
+variant in the phase that actually constructs it.
 
 `ui::draw` stays a pure fn of `&App`. The immediate-mode model does not change
 — only the input source does.
 
 ### 1c. `tui/theme.rs`
 
-- [ ] Ratatui `Style` twins of `theme.rs`'s concepts, same colours: `live`
-      bright green bold, `name` bright cyan bold, `muted` dark gray, `url` blue
-      dim, plus the `status_tag` mapping
-- [ ] Move `ui.rs`'s inline `Color::DarkGray` into it
+- [x] Ratatui `Style` twins of the two concepts this phase renders: `name`
+      bright cyan bold, `muted` dark gray (using an explicit `Color`, not a
+      `DIM` modifier — terminal support for `DIM` is inconsistent, and
+      `DarkGray` is what Phase 0 already shipped and verified). `live`,
+      `url`, and `status_tag` are deferred to Phases 3 and 2, when a live
+      badge and a URL first appear on screen — same dead-code constraint as
+      `Message` above.
+- [x] Move `ui.rs`'s inline `Color::DarkGray` into it
 
 ### Also
 
-- [ ] `Screen` enum on `App` (`List` / `Detail` / `Modal(..)`)
-- [ ] Status bar: key hints + last error
-- [ ] `?` help overlay, doubling as `oshihub config` — resolved backend URL and
-      *whether* a token is set and from where. **Never the token itself**,
-      matching the existing rule in `Commands::Config`.
+- [x] `Screen` enum on `App` — `List` / `Help` only for now; `Detail` and
+      `Modal(..)` are added in Phases 2 and 5 when something actually
+      constructs them
+- [x] Status bar: key hints, context-sensitive to `Screen`. A "last error"
+      slot is deferred — Phase 1 has no interaction that can fail without
+      already replacing the whole view via `LoadState::Failed`; it becomes
+      meaningful once Phase 2/5 can fail without nuking the list
+- [x] `?` help overlay, doubling as `oshihub config` — resolved backend URL
+      and *whether* a token is set and from where. **Never the token
+      itself**, matching the existing rule in `Commands::Config`. Resolved
+      once into `App` fields at startup (`config_url`/`config_source`/
+      `config_token`) rather than read from `ui::draw`, so `draw` stays a
+      pure function of `&App` alone.
 
-**Review:** list still renders and navigates; `?` opens and closes and shows
+**Review:** done — list renders and navigates; `?` opens and closes and shows
 the right backend URL; status bar visible; `q` still quits cleanly.
 
 ---
