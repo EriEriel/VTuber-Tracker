@@ -3,6 +3,7 @@ mod models;
 mod notify;
 mod routes;
 mod theme;
+mod tui;
 mod watch;
 
 use clap::{Parser, Subcommand};
@@ -83,6 +84,9 @@ enum Commands {
         #[arg(long)]
         notify_existing: bool,
     },
+    /// Browse tracked VTubers in a full-screen terminal UI
+    #[command(alias = "t")]
+    Tui,
     /// Show the resolved backend URL and where it came from
     Config,
 }
@@ -247,6 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await?;
         }
+        Commands::Tui => tui::run().await?,
         Commands::Config => {
             let cfg = config::config();
             println!("Backend URL: {}", cfg.api_url);
