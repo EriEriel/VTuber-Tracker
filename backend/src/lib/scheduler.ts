@@ -24,6 +24,7 @@
 
 import { VTuber, Stream } from '../models';
 import { markLive, markEnded } from './live-state';
+import { syncFromHolodex, syncFromYoutube, syncFromTwitch } from './sync';
 import { mapHolodexStream } from './mappers/holodex.mappers';
 import { mapYoutubeStream } from './mappers/youtube.mapper';
 
@@ -218,6 +219,97 @@ async function pollYoutubeApiPopulation(): Promise<void> {
       console.log(`${name} is no longer live on YouTube (RSS/videos.list poll)`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stats sync poller
+//
+// StatSnapshots used to be created only opportunistically: at registration,
+// on a manual sync, or when Twitch's stream.online fired a forced sync. That
+// left most channels with a single snapshot forever — no producer, no trend
+// line for the TUI dashboard. This poller is that producer.
+//
+// A cycle is exactly what POST /api/sync/all does unforced: the three
+// syncFrom* calls with no id and force=false. The 24h lastStatsSyncedAt gate
+// inside each one is what makes this safe to run far more often than daily —
+// a cycle where everyone is fresh is three cheap DB reads and zero external
+// API calls. That's also why the interval defaults to 6h rather than 24h:
+// the gate dedupes the extra ticks, and ticking more often bounds worst-case
+// staleness after a restart (the boot-time cycle plus a 24h interval could
+// otherwise drift toward ~48h between real snapshots).
+
+const STATS_DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+interface StatsSchedulerState {
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+// Own hot.data slot, same pattern as `state` above — a file edit under
+// `bun --hot` must not stack a second stats loop either.
+const statsState: StatsSchedulerState = hot
+  ? (hot.data.statsScheduler ??= { timer: null })
+  : { timer: null };
+
+if (hot) {
+  hot.prune(() => {
+    if (statsState.timer) clearTimeout(statsState.timer);
+    statsState.timer = null;
+  });
+}
+
+async function statsSyncCycle(): Promise<void> {
+  // allSettled, not sequential aborts: one source's API being down shouldn't
+  // cost the other two their daily snapshot — mirrors POST /api/sync/all.
+  const [holodex, youtube, twitch] = await Promise.allSettled([
+    syncFromHolodex(undefined, false),
+    syncFromYoutube(undefined, false),
+    syncFromTwitch(undefined, false),
+  ]);
+
+  const describe = (label: string, result: PromiseSettledResult<any[]>) => {
+    if (result.status === 'rejected') {
+      console.error(`Stats sync cycle: ${label} failed:`, result.reason);
+      return `${label} failed`;
+    }
+    return `${label} ${result.value.length}`;
+  };
+
+  console.log(
+    `Stats sync cycle done: ${describe('holodex', holodex)}, ${describe('youtube', youtube)}, ${describe('twitch', twitch)}`
+  );
+}
+
+function scheduleNextStatsSync(intervalMs: number): void {
+  statsState.timer = setTimeout(() => {
+    statsSyncCycle()
+      .catch((err) => console.error('Stats sync cycle failed:', err))
+      .finally(() => scheduleNextStatsSync(intervalMs));
+  }, intervalMs);
+}
+
+/**
+ * Starts the daily-ish stats sync loop. Same shape as the live poller above:
+ * self-rescheduling (never overlapping), immediate first cycle at boot (safe
+ * — the 24h gates make an early cycle a no-op when everyone's fresh), and
+ * STATS_SYNC_DISABLED=true as the laptop-side kill switch so local dev
+ * doesn't double-sync the shared Atlas data the VPS already covers — the
+ * same reasoning as YOUTUBE_POLL_DISABLED.
+ */
+export function startStatsSyncPoller(): void {
+  if (process.env.STATS_SYNC_DISABLED === 'true') {
+    console.warn('STATS_SYNC_DISABLED=true — skipping stats sync poller');
+    return;
+  }
+  if (statsState.timer) {
+    // Survived a hot reload via import.meta.hot.data — reuse it.
+    return;
+  }
+
+  const intervalMs = Number(process.env.STATS_SYNC_INTERVAL_MS) || STATS_DEFAULT_INTERVAL_MS;
+
+  statsSyncCycle()
+    .catch((err) => console.error('Stats sync cycle failed:', err))
+    .finally(() => scheduleNextStatsSync(intervalMs));
 }
 
 export async function pollCycle(): Promise<void> {

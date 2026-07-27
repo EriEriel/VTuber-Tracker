@@ -7,7 +7,7 @@ import { syncRoute } from './routes/sync';
 import { eventsubRoute } from './routes/eventsub';
 import { connectToDatabase } from './lib/db';
 import { initTwitchEventSub } from './lib/twitch-eventsub';
-import { startYoutubeLivePoller } from './lib/scheduler';
+import { startYoutubeLivePoller, startStatsSyncPoller } from './lib/scheduler';
 import { requireApiToken, assertApiTokenConfigured } from './lib/require-api-token';
 
 assertApiTokenConfigured();
@@ -51,6 +51,7 @@ try {
 }
 initTwitchEventSub();
 startYoutubeLivePoller();
+startStatsSyncPoller();
 
 // Configurable so the container can be remapped without a rebuild; keeps
 // the previous hardcoded 3000 as the default for local dev.

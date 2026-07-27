@@ -418,6 +418,86 @@ vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
 });
 
 /**
+ * GET /api/vtubers/:id/stats/subscriber-trend
+ * Daily subscriber/follower series for the dashboard's trend chart.
+ * Query: days=<n> (default 90, max 365).
+ *
+ * Unlike stream-frequency's counts, points here are SPARSE — a day with no
+ * snapshot is simply missing (it means "didn't sync", never "zero
+ * subscribers"), and the line connects across the gap. Each point carries an
+ * integer `day` offset from `from` so clients keep gaps proportional on the
+ * x-axis without doing their own date math, plus its date for labelling.
+ */
+vtubersRoute.get('/api/vtubers/:id/stats/subscriber-trend', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const vtuber = await VTuber.findById(id);
+    if (!vtuber) {
+      return c.json({ error: 'VTuber not found' }, 404);
+    }
+
+    const daysRaw = parseInt(c.req.query('days') ?? '', 10);
+    const days = Number.isFinite(daysRaw) ? Math.min(Math.max(daysRaw, 1), 365) : 90;
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    const currentDayStart = new Date();
+    currentDayStart.setUTCHours(0, 0, 0, 0);
+    const from = new Date(currentDayStart.getTime() - (days - 1) * dayMs);
+
+    // One point per UTC day, the day's LAST snapshot winning — forced syncs
+    // (stream.online, manual s) can capture several per day and the newest
+    // is simply the freshest truth. $last is only meaningful because of the
+    // $sort feeding the $group. The { vtuberId, capturedAt } index covers
+    // the match.
+    const grouped = await StatSnapshot.aggregate([
+      { $match: { vtuberId: vtuber._id, capturedAt: { $gte: from } } },
+      { $sort: { capturedAt: 1 } },
+      {
+        $group: {
+          _id: { $dateTrunc: { date: '$capturedAt', unit: 'day' } },
+          subscribers: { $last: '$subscriberCount' },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const points = grouped.map((g) => {
+      const dayStart = new Date(g._id);
+      return {
+        day: Math.round((dayStart.getTime() - from.getTime()) / dayMs),
+        date: dayStart.toISOString().slice(0, 10),
+        subscribers: g.subscribers,
+      };
+    });
+
+    // Deltas are "current vs where they were at least N days ago" — the
+    // newest snapshot that's ≥N days old, not an interpolation. null when
+    // history is too short to answer honestly (a young record shouldn't
+    // report a fake +0).
+    const current = points.length > 0 ? points[points.length - 1].subscribers : null;
+    const deltaVs = async (msAgo: number) => {
+      if (current === null) return null;
+      const baseline = await StatSnapshot.findOne({
+        vtuberId: vtuber._id,
+        capturedAt: { $lte: new Date(Date.now() - msAgo) },
+      }).sort({ capturedAt: -1 });
+      return baseline ? current - baseline.subscriberCount : null;
+    };
+
+    return c.json({
+      from: from.toISOString().slice(0, 10),
+      days,
+      points,
+      current,
+      delta7d: await deltaVs(7 * dayMs),
+      delta30d: await deltaVs(30 * dayMs),
+    });
+  } catch (error) {
+    return c.json({ error: 'Failed to compute subscriber trend', detail: String(error) }, 500);
+  }
+});
+
+/**
  * PUT /api/vtubers/:id
  * Update VTuber details (e.g. name, isTracked status)
  */
