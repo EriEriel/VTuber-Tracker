@@ -1,4 +1,9 @@
 mod config;
+// Test-only: live contract tests against a real backend, all #[ignore]d so
+// `cargo test` stays offline. `cfg(test)` keeps them out of the binary
+// entirely rather than relying on dead-code elimination.
+#[cfg(test)]
+mod contract;
 mod models;
 mod notify;
 mod routes;
