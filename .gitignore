@@ -3,5 +3,4 @@ node_modules/
 .env
 Claude Context/
 sync-investigation-checklists.md
-CLAUDE.md
 .aider*
