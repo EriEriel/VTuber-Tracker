@@ -327,6 +327,37 @@ vtubersRoute.get('/api/vtubers/:id/profile-url', async (c) => {
 });
 
 /**
+ * The shared bucket-window arithmetic for the /stats/* endpoints: parses
+ * unit/buckets query params and computes the window start, aligned to the
+ * start of the current UTC bucket (Monday-based for weeks, matching
+ * $dateTrunc's startOfWeek). UTC has no DST, so stepping backwards by a
+ * fixed ms-per-bucket is safe.
+ */
+function bucketWindow(c: { req: { query: (k: string) => string | undefined } }) {
+  const unit = c.req.query('unit') === 'day' ? ('day' as const) : ('week' as const);
+  const bucketsRaw = parseInt(c.req.query('buckets') ?? '', 10);
+  const buckets = Number.isFinite(bucketsRaw) ? Math.min(Math.max(bucketsRaw, 1), 366) : 52;
+
+  const stepMs = (unit === 'week' ? 7 : 1) * 24 * 60 * 60 * 1000;
+  const currentStart = new Date();
+  currentStart.setUTCHours(0, 0, 0, 0);
+  if (unit === 'week') {
+    currentStart.setUTCDate(currentStart.getUTCDate() - ((currentStart.getUTCDay() + 6) % 7));
+  }
+  const from = new Date(currentStart.getTime() - (buckets - 1) * stepMs);
+
+  // Dense bucket-start dates ("YYYY-MM-DD", UTC), parallel to whatever
+  // per-bucket arrays the endpoint returns — clients label bars with these
+  // rather than doing their own calendar math (the Rust CLI deliberately
+  // carries no date crate).
+  const starts = Array.from({ length: buckets }, (_, i) =>
+    new Date(from.getTime() + i * stepMs).toISOString().slice(0, 10)
+  );
+
+  return { unit, buckets, stepMs, from, starts };
+}
+
+/**
  * GET /api/vtubers/:id/stats/stream-frequency
  * Bucketed stream counts for the dashboard's frequency chart.
  * Query: unit=week|day (default week), buckets=<n> (default 52, max 366).
@@ -341,20 +372,7 @@ vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
       return c.json({ error: 'VTuber not found' }, 404);
     }
 
-    const unit = c.req.query('unit') === 'day' ? 'day' : 'week';
-    const bucketsRaw = parseInt(c.req.query('buckets') ?? '', 10);
-    const buckets = Number.isFinite(bucketsRaw) ? Math.min(Math.max(bucketsRaw, 1), 366) : 52;
-
-    // Start of the current bucket in UTC (Monday-based for weeks, matching
-    // $dateTrunc's startOfWeek below). UTC has no DST, so stepping backwards
-    // by a fixed ms-per-bucket is safe.
-    const stepMs = (unit === 'week' ? 7 : 1) * 24 * 60 * 60 * 1000;
-    const currentStart = new Date();
-    currentStart.setUTCHours(0, 0, 0, 0);
-    if (unit === 'week') {
-      currentStart.setUTCDate(currentStart.getUTCDate() - ((currentStart.getUTCDay() + 6) % 7));
-    }
-    const from = new Date(currentStart.getTime() - (buckets - 1) * stepMs);
+    const { unit, buckets, stepMs, from, starts } = bucketWindow(c);
 
     // Count only streams that actually happened: 'upcoming' would put phantom
     // counts in future buckets (HoloDex returns scheduled streams), and
@@ -397,13 +415,6 @@ vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
       if (bucketStart + stepMs <= firstStreamMs) return null;
       return byTime.get(bucketStart) ?? 0;
     });
-
-    // Dense bucket-start dates ("YYYY-MM-DD", UTC), parallel to counts, so
-    // clients can label bars without doing their own calendar math — the
-    // Rust CLI deliberately carries no date crate.
-    const starts = Array.from({ length: buckets }, (_, i) =>
-      new Date(from.getTime() + i * stepMs).toISOString().slice(0, 10)
-    );
 
     return c.json({
       unit,
@@ -494,6 +505,92 @@ vtubersRoute.get('/api/vtubers/:id/stats/subscriber-trend', async (c) => {
     });
   } catch (error) {
     return c.json({ error: 'Failed to compute subscriber trend', detail: String(error) }, 500);
+  }
+});
+
+// Below this, a "stream" doesn't count for duration stats. YouTube-sourced
+// Stream docs include Shorts and ordinary uploads (observed: 14–46 second
+// "streams" on real channels), which would poison any average; no genuine
+// live stream is shorter than this.
+const MIN_STREAM_DURATION_SECS = 600;
+
+// Plain JS median rather than Mongo's $median accumulator — that needs
+// MongoDB 7.0+, and coupling the endpoint to the Atlas version isn't worth
+// it for a ten-line function over a handful of values per bucket.
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+/**
+ * GET /api/vtubers/:id/stats/duration-trend
+ * Median stream duration (seconds) per bucket, for the dashboard.
+ * Query: unit=week|day (default week), buckets=<n> (default 52, max 366).
+ *
+ * MEDIAN, not mean — buckets hold 3–8 streams, where one 12h subathon
+ * would double a mean, and it pairs with the MIN_STREAM_DURATION_SECS
+ * floor to survive the Shorts contamination described above. Buckets with
+ * no qualifying stream are null (an "average duration" of nothing isn't
+ * 0). Dense arrays parallel to `starts`, same window arithmetic as
+ * stream-frequency so the two charts' buckets line up column-for-column.
+ */
+vtubersRoute.get('/api/vtubers/:id/stats/duration-trend', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const vtuber = await VTuber.findById(id);
+    if (!vtuber) {
+      return c.json({ error: 'VTuber not found' }, 404);
+    }
+
+    const { unit, buckets, stepMs, from, starts } = bucketWindow(c);
+
+    // status 'ended' only: live streams have null duration anyway, and a
+    // still-running stream has no final duration to count. $gte also
+    // excludes null durations (EventSub-ended streams no VOD sync has
+    // backfilled yet).
+    const grouped = await Stream.aggregate([
+      {
+        $match: {
+          vtuberId: vtuber._id,
+          status: 'ended',
+          duration: { $gte: MIN_STREAM_DURATION_SECS },
+          startTime: { $gte: from },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateTrunc: { date: '$startTime', unit, startOfWeek: 'monday' } },
+          durations: { $push: '$duration' },
+        },
+      },
+    ]);
+
+    const byTime = new Map<number, number[]>(
+      grouped.map((g) => [new Date(g._id).getTime(), g.durations])
+    );
+    const medians = Array.from({ length: buckets }, (_, i): number | null =>
+      median(byTime.get(from.getTime() + i * stepMs) ?? [])
+    );
+    const counts = Array.from(
+      { length: buckets },
+      (_, i) => (byTime.get(from.getTime() + i * stepMs) ?? []).length
+    );
+
+    const all = grouped.flatMap((g) => g.durations as number[]);
+
+    return c.json({
+      unit,
+      from: from.toISOString(),
+      starts,
+      medians,
+      counts,
+      overallMedian: median(all),
+      longest: all.length > 0 ? Math.max(...all) : null,
+    });
+  } catch (error) {
+    return c.json({ error: 'Failed to compute duration trend', detail: String(error) }, 500);
   }
 });
 
