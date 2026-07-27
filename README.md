@@ -2,7 +2,7 @@
 
 A polyglot project: a Hono/Bun REST API that aggregates VTuber data from HoloDex, YouTube, and Twitch into a unified MongoDB schema, plus `oshihub`, a Rust CLI client for it.
 
-Track the streamers you watch from one place in the terminal — list them, look up recent streams and clips with inline thumbnails, see who's live right now, and jump straight to a channel in your browser. One-shot subcommands or a full-screen [TUI](#tui-oshihub-tui) — same backend, either way.
+Track the streamers you watch from one place in the terminal — list them, look up recent streams and clips with inline thumbnails, see who's live right now, chart their streaming habits and follower growth, and jump straight to a channel in your browser. One-shot subcommands or a full-screen [TUI](#tui-oshihub-tui) — same backend, either way.
 
 ```
 .
@@ -211,7 +211,7 @@ A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't l
 oshihub tui
 ```
 
-A full-screen `ratatui` interface over the same backend the one-shot commands use — **v0.1 complete**: main list, detail view (streams/clips), live badges that auto-refresh in place, incremental search/filter, and sync/delete/create/edit, all without leaving the terminal. It's a second front end alongside the one-shot commands above, not a replacement for them.
+A full-screen `ratatui` interface over the same backend the one-shot commands use — **v0.5.0**: main list, detail view (streams/clips), live badges that auto-refresh in place, incremental search/filter, sync/delete/create/edit, and a per-VTuber stats dashboard, all without leaving the terminal. It's a second front end alongside the one-shot commands above, not a replacement for them.
 
 ![Main list — tracked VTubers with a live badge](asset/tui-list.png)
 
@@ -222,6 +222,7 @@ L               live-only       s       sync selected
 ?               help overlay    d       delete selected (confirms)
 Esc / h         back            a       add from URL
 q               quit            e       edit selected
+g               stats dashboard
 ```
 
 Live badges refresh on their own, on the same `watch_interval_secs` config `oshihub watch` uses — a VTuber going live mid-session picks up the badge within one interval, no restart or manual `s` needed, and briefly highlights to show it's new.
@@ -237,7 +238,21 @@ Live badges refresh on their own, on the same `watch_interval_secs` config `oshi
 </tr>
 </table>
 
-The Detail screen shows the VTuber's avatar beside its name, and a focus-following preview pane below the streams/clips lists renders whichever stream is currently selected — `viuer` (used for the plain CLI's thumbnails above) writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame, so the TUI uses the `ratatui-image` crate instead. See [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md)'s Phase 7.5 for the full design. A dashboard/charts screen (Phase 8) is planned but deferred.
+The Detail screen shows the VTuber's avatar beside its name, and a focus-following preview pane below the streams/clips lists renders whichever stream is currently selected — `viuer` (used for the plain CLI's thumbnails above) writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame, so the TUI uses the `ratatui-image` crate instead. See [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md)'s Phase 7.5 for the full design.
+
+#### Dashboard (`g`)
+
+Pressing `g` on a VTuber opens its stats dashboard: streams per week and median stream duration side by side (same weeks, so the columns line up), with the follower/subscriber trend line below.
+
+![Dashboard — streams per week, median duration, and the follower trend line](asset/tui-dashbord.png)
+
+A few deliberate choices behind the charts:
+
+- **Weeks before tracking started are omitted, not shown as zero** — the backend distinguishes "no data" from "didn't stream", and the current partial week is dimmed and marked `now` so a low final bar doesn't read as a decline.
+- **Duration uses the median with a 10-minute floor**, because YouTube Shorts land in the stream list as 14-second "streams" and would drag an average through the floor.
+- **The trend line is fed by daily snapshots** the backend now collects on its own (see [Sync behavior](#sync-behavior)); the 7/30-day deltas stay blank until enough history exists rather than showing a misleading `+0`.
+
+Everything is served by three `GET /api/vtubers/:id/stats/{stream-frequency,duration-trend,subscriber-trend}` endpoints — the CLI deliberately has no date library, so all calendar math (UTC Monday-aligned weeks, bucket labels, deltas) happens backend-side.
 
 ### Stack
 
@@ -293,7 +308,7 @@ your-host.example.com {
 
 These are evaluated separately, so a single call can refresh live status while skipping stats (or vice versa), depending on which gate has expired. Pass `?force=true` to bypass both gates unconditionally.
 
-Full syncs (stats, clips, VOD backfill) run only when a request hits one of these routes. Registering a VTuber triggers an initial sync automatically, so a new entry has streams and clips immediately.
+Registering a VTuber triggers an initial sync automatically, so a new entry has streams and clips immediately. Beyond that, the backend runs an **unforced sync cycle every 6 hours** (the stats poller — added so the dashboard's trend chart accumulates daily subscriber snapshots). Because it's unforced, the staleness gates above make it cheap: in practice each tracked channel gets roughly one stat snapshot per day, and live status is usually skipped as already-fresh. `STATS_SYNC_INTERVAL_MS` overrides the interval; set `STATS_SYNC_DISABLED=true` on a second machine so only one instance spends API quota on it.
 
 Live status is separate and does update on its own — Twitch pushes it via EventSub, and the YouTube poller derives it every 5 minutes (see [Live detection](#4-live-detection-optional)). Both write through the same `markLive`/`markEnded` pair, which is the only thing in the backend that sets a stream live or ends it.
 
@@ -338,11 +353,13 @@ CLI coverage of the backend:
 - [x] Force sync via `sync`
 - [x] Configurable backend URL and auth token
 - [x] Desktop notifications on going live via `watch`
-- [x] Full-screen TUI (`tui`) — v0.1 complete: list, detail, live, search/filter, create/sync/delete/edit, auto-refresh
+- [x] Full-screen TUI (`tui`) — list, detail, live, search/filter, create/sync/delete/edit, auto-refresh
 - [x] TUI Detail avatar and stream thumbnail preview via `ratatui-image` (Phase 7.5)
+- [x] TUI stats dashboard (`g`) — stream frequency, median duration, follower/subscriber trend, backed by the `/stats/*` endpoints and the backend stats poller (Phase 8, v0.5.0)
 
 Known gaps:
 
 - No one-shot `update` subcommand — `PUT /api/vtubers/:id` is only reachable through the TUI.
 - `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify; same is true of two TUI sessions polling live status independently.
-- TUI images (avatar + stream preview) only render on the Detail screen, not on List rows — a deliberate scope cut, not a bug. A dashboard/charts screen (Phase 8) is planned but not started — see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md).
+- TUI images (avatar + stream preview) only render on the Detail screen, not on List rows — a deliberate scope cut, not a bug.
+- The trend chart's 7/30-day deltas need that much snapshot history before they show anything — a freshly deployed backend displays "no 7-day baseline yet" for the first week.
