@@ -4,8 +4,9 @@ Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5's
 thumbnails (VTuber avatar in Detail's header, plus a focus-following stream
 preview pane) have landed; its general polish pass stays open-ended by
 design, new small fixes just get added to it rather than closing the phase.
-Phase 8 (dashboard) remains deferred to a future release. Developed directly
-on `main`, not a separate `tui` branch.
+Phase 8 (dashboard) is **underway**: the stream-frequency chart (`g`)
+shipped first; the remaining charts are still open. Developed directly on
+`main`, not a separate `tui` branch.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -54,7 +55,7 @@ So:
 | `create <url>` | `c` | `a` → URL input modal | ✅ 5 |
 | *(none — known gap)* | — | `e` → edit modal | ✅ 6 |
 | `watch` | `w` | Auto-refresh in place | ✅ 7 |
-| *(none — future)* | — | Dashboard / charts | 8 |
+| *(none — future)* | — | `g` → dashboard / charts | 🚧 8 |
 
 ## Keymap
 
@@ -67,7 +68,7 @@ L               live-only       s       sync selected
 ?               help overlay    d       delete selected (confirms)
 r               refresh         a       add from URL
 Esc / h         back            e       edit selected
-q               quit
+q               quit            g       dashboard (from list/detail)
 ```
 
 ---
@@ -139,6 +140,9 @@ PUT    /api/vtubers/:id               ← { name?, englishName?, photo?,
 DELETE /api/vtubers/:id
 POST   /api/sync/{holodex|youtube|twitch}?id=<id>&force=true
 POST   /api/sync/all
+GET    /api/vtubers/:id/stats/stream-frequency
+                                      → { unit, from, firstStreamAt,
+                                          counts[], starts[] }   (Phase 8)
 ```
 
 Shape notes worth knowing before modelling anything:
@@ -609,22 +613,44 @@ different VTuber shows neither the old avatar nor the old preview.
 
 ---
 
-# Phase 8 — Dashboard (deferred)
+# Phase 8 — Dashboard (in progress)
 
 From `Todo.md`'s dashboard section. All aggregations over data the schema
 already collects — no new tracking, just querying what's there.
 
-- [ ] Stream frequency — bucket `Stream.startTime`
+- [x] Stream frequency — `g` (List or Detail) opens a per-VTuber
+      `Screen::Dashboard`; `Esc`/`h` returns to whichever screen `g` was
+      pressed on (`App::dashboard_return` — the one place a "where did I
+      come from" slot exists, still not a stack). Backed by a new
+      `GET /api/vtubers/:id/stats/stream-frequency` endpoint: a
+      `$dateTrunc`-grouped count of `status ∈ {live, ended}` streams per
+      UTC week (Monday start), densified to zero-filled buckets, with
+      buckets predating the first recorded stream returned as `null` and a
+      parallel `starts[]` of bucket dates — **all calendar math lives on
+      the backend**, the CLI deliberately has no date crate. Reviewed by
+      running, twice — see the lessons below.
 - [ ] Follower/subscriber trend — `StatSnapshot` is append-only, so the line
       data exists as soon as two snapshots do. Show the delta ("+500 this
       week") alongside the raw count; it reads better at a glance
 - [ ] Average stream duration trend — `Stream.duration` is already computed
 - [ ] Model `snapshots[]` in the CLI
 
-Before designing any aggregation endpoint, check what shape ratatui's
-`Sparkline`/`Chart` widgets actually want data in — the terminal-charting half
-is the harder one, not the data. Out of scope for v0.1; first thing on top of
-it once picked back up.
+**Lessons from the frequency chart, paid for in a full rework.** The first
+cut used `Sparkline` (dense, ~50 weeks visible, `Option<u64>` absent-bar
+support for pre-tracking weeks) and failed review on glanceability: no
+dates, no numbers, and — worst — absent bars render as *full-height*
+columns, making "no data" the tallest thing on screen. The rework that
+passed: a labelled `BarChart` (week date under each bar, count printed on
+it, ~12 weeks on 80 cols), pre-tracking buckets **dropped** at the
+`FrequencyView` mapping boundary rather than charted (the summary line's
+"since <date>" carries that information), and the current partial week
+dimmed + labelled `now` so its low count doesn't read as decline. Two
+widget traps verified in ratatui-widgets source: `BarChart` drops
+*overflow* bars from the end (so `ui.rs` slices the tail itself, newest
+weeks win, using the widget's own fitting arithmetic), and per-bar
+`value_style` needs `REVERSED` for the count to read as text on the bar.
+For the remaining charts: start from "what does a glance need to answer",
+not from the densest widget that fits the data.
 
 ---
 
