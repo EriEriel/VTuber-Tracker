@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -189,8 +189,31 @@ fn draw_hints_bar(frame: &mut Frame, area: Rect, app: &App) {
             Screen::Modal(ModalKind::Edit) => "Tab/↑↓ field · Space toggle · Enter save · Esc cancel",
         }
     };
-    let p = Paragraph::new(hints).style(theme::muted());
+    let p = Paragraph::new(truncate_with_ellipsis(hints, area.width as usize)).style(theme::muted());
     frame.render_widget(p, area);
+}
+
+/// Hints run up to ~110 chars; a narrow terminal (or a split pane) leaves
+/// `area.width` well short of that. Without this, `Paragraph`'s own
+/// truncation still clips to the area — it can't paint past it — but it
+/// does so silently mid-word, so the row just stops with no sign anything's
+/// missing. Cutting here instead reserves the last cell for `…`, so it's
+/// obvious the hint list continues past the edge.
+///
+/// Char-count truncation, not byte-count: every hint string is ASCII plus
+/// single-width separators (`·`, `↑`, `↓`), so counting `chars()` already
+/// matches terminal cell width — no need for the `unicode-width` crate over
+/// one string with a known, narrow charset.
+fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.chars().count() <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let mut truncated: String = text.chars().take(max_width - 1).collect();
+    truncated.push('…');
+    truncated
 }
 
 /// Name/org/platform come straight from the selected `VtuberRow` — already
@@ -376,7 +399,12 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
 /// so selection can't drift while this is open, and this way the prompt and
 /// the delete it confirms are guaranteed to name the same VTuber.
 fn draw_confirm_delete(frame: &mut Frame, area: Rect, app: &App) {
-    let popup = centered_rect(50, 20, area);
+    // Fixed height, not `centered_rect`'s usual `Percentage` — 20% of a
+    // short terminal (an 80x24 default undershoots this) can be less than
+    // the 5 lines of content, and a long VTuber name can outgrow a
+    // `Percentage`-width popup entirely. 8 rows covers the content with a
+    // spare line even once `Wrap` below turns a long name into two lines.
+    let popup = centered_rect_fixed_height(60, 8, area);
     frame.render_widget(Clear, popup);
 
     let name = app.selected().map(|row| row.name.as_str()).unwrap_or("this VTuber");
@@ -389,7 +417,15 @@ fn draw_confirm_delete(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     let block = Block::default().title(" Confirm delete ").borders(Borders::ALL);
-    frame.render_widget(Paragraph::new(lines).block(block), popup);
+    // Without `Wrap`, `Paragraph` truncates any line wider than the popup
+    // hard at the border — no ellipsis, no second line — which is what
+    // made the fixed message ("...streams, clips, and snapshots.", 52
+    // chars) read as cut off on anything narrower than ~90 columns, and
+    // would do the same to a long VTuber name on the line above it.
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        popup,
+    );
 }
 
 fn draw_create_url(frame: &mut Frame, area: Rect, app: &App) {
@@ -466,6 +502,27 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_y) / 2),
         Constraint::Percentage(percent_y),
         Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1])[1]
+}
+
+/// Same idea as `centered_rect`, but the height is an absolute row count
+/// rather than a percentage of the screen. A percentage height shrinks with
+/// the terminal — fine for content that's mostly whitespace, but a modal
+/// with a fixed number of text lines (like confirm-delete) needs at least
+/// that many rows regardless of how tall the terminal is.
+fn centered_rect_fixed_height(percent_x: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(height),
+        Constraint::Fill(1),
     ])
     .split(area);
 
