@@ -524,11 +524,10 @@ badge. VTubers already live at startup never got the highlight.
 
 ---
 
-# Phase 7.5 — Polish & thumbnails (planned)
+# Phase 7.5 — Polish & thumbnails (in progress)
 
-Not scheduled yet — a holding pen for this doc rather than an open-ended
-Known gaps list growing without a home. Two things belong here before
-Phase 8:
+A holding pen for this doc rather than an open-ended Known gaps list growing
+without a home. Two things belong here before Phase 8:
 
 - [ ] **Thumbnails inside the TUI.** `lookup`/`live` render them via `viuer`,
       which writes graphics escapes straight at wherever the cursor sits.
@@ -539,13 +538,36 @@ Phase 8:
       half-block/ANSI-art approach drawn as ordinary styled cells so ratatui
       owns every pixel it's responsible for. Not investigated yet — this
       entry is the placeholder to come back to, not a design decision.
-- [ ] **General polish pass.** No specific list yet; the intent is to catch
-      small UX rough edges (a couple already sit in Known gaps below) rather
-      than opening a one-off phase per fix. Add to this bullet as they turn
-      up instead of starting a new section each time.
+- [x] **General polish pass.** Catching small UX rough edges as they turn up
+      rather than opening a one-off phase per fix. Landed so far, all
+      reviewed by running:
+    - [x] `o` (open browser, List and Detail) no longer calls
+          `App::begin_action`. It used to, but a successful `open::that`
+          sends no message back to end it — only the failure path did — so
+          `app.pending` never decremented and the spinner spun forever after
+          the first successful open. `o`'s failure path now sets
+          `app.status` directly instead of routing through `end_action`,
+          so it can no longer steal a decrement from an unrelated `s`/`d`/`a`
+          action still in flight either.
+    - [x] Hints bar truncates with a trailing `…` on a narrow terminal
+          instead of letting `Paragraph`'s own (silent, mid-word) truncation
+          cut a key binding off with no sign anything's missing.
+    - [x] Confirm-delete modal no longer clips its message. It used
+          `centered_rect`'s `Percentage` height, which a normal ~24-row
+          terminal can undershoot for the 5 lines of content, and no `Wrap`,
+          so the fixed message (52 chars) didn't fit a 50%-wide popup's
+          inner width on a standard 80-column terminal and lost its tail.
+          Now uses a fixed-row-count popup (`centered_rect_fixed_height`)
+          plus `Wrap { trim: true }`.
+    - [x] Version number (`CARGO_PKG_VERSION`, compile-time) added to the
+          far right of the hints bar, in its own reserved layout slot so
+          truncation on a narrow terminal eats into the hint text before it
+          ever touches the version. Styled `Style::default()` to match the
+          unstyled border colour used everywhere else in the TUI, not
+          `theme::muted()`'s dim hint-text colour.
 
-Deliberately light on detail — the point right now is reserving the slot
-before Phase 8, not committing to a design for either item.
+Deliberately light on detail for thumbnails — the point right now is
+reserving the slot before Phase 8, not committing to a design.
 
 ---
 
