@@ -1,8 +1,12 @@
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Bar, BarChart, Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Axis, Bar, BarChart, Block, Borders, Chart, Clear, Dataset, GraphType, List, ListItem,
+        Paragraph, Wrap,
+    },
     Frame,
 };
 use ratatui_image::Image;
@@ -331,15 +335,10 @@ const CHART_ROWS: u16 = 6;
 const BAR_WIDTH: u16 = 5;
 const BAR_GAP: u16 = 1;
 
-/// Phase 8's per-VTuber dashboard: one chart (stream frequency) plus a
-/// summary line, sized to grow downward as later charts land.
-///
-/// A labelled `BarChart`, not a `Sparkline` — the first cut used one and
-/// failed the glanceability test on all three counts a sparkline trades
-/// away: no dates on the x-axis, no numbers on the bars, and its "absent"
-/// mechanism made *no data* the tallest thing on screen. Fewer weeks
-/// visible (each labelled bar costs `BAR_WIDTH + BAR_GAP` columns), but
-/// every bar now answers "which week, how many" by itself.
+/// Phase 8's per-VTuber dashboard: stream frequency on top, the
+/// subscriber/follower trend below, each with a one-line summary. The two
+/// sections load independently — `g` fans out two fetches, and each block
+/// renders its own Loading/Failed/Loaded state.
 fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .title(format!(" Dashboard — {} ", app.dashboard_name))
@@ -347,13 +346,34 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let chunks = Layout::vertical([
+        // frequency: bars + the label row + the chart block's two border rows
+        Constraint::Length(CHART_ROWS + 3),
+        Constraint::Length(1), // frequency summary
+        Constraint::Min(8),    // trend chart — flexes with terminal height
+        Constraint::Length(1), // trend summary
+    ])
+    .split(inner);
+
+    draw_frequency_section(frame, chunks[0], chunks[1], app);
+    draw_trend_section(frame, chunks[2], chunks[3], app);
+}
+
+/// The frequency half of the dashboard: a labelled `BarChart`, not a
+/// `Sparkline` — the first cut used one and failed the glanceability test
+/// on all three counts a sparkline trades away: no dates on the x-axis, no
+/// numbers on the bars, and its "absent" mechanism made *no data* the
+/// tallest thing on screen. Fewer weeks visible (each labelled bar costs
+/// `BAR_WIDTH + BAR_GAP` columns), but every bar answers "which week, how
+/// many" by itself.
+fn draw_frequency_section(frame: &mut Frame, chart_area: Rect, summary_area: Rect, app: &App) {
     let freq = match &app.frequency_load {
         LoadState::Loading => {
-            frame.render_widget(Paragraph::new("Loading stream history..."), inner);
+            frame.render_widget(Paragraph::new("Loading stream history..."), chart_area);
             return;
         }
         LoadState::Failed(msg) => {
-            frame.render_widget(Paragraph::new(format!("Error: {msg}")), inner);
+            frame.render_widget(Paragraph::new(format!("Error: {msg}")), chart_area);
             return;
         }
         LoadState::Loaded => app.frequency.as_ref(),
@@ -363,24 +383,16 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     if freq.weeks.is_empty() {
         frame.render_widget(
             Paragraph::new("No streams recorded yet — try s to sync.").style(theme::muted()),
-            inner,
+            chart_area,
         );
         return;
     }
-
-    let chunks = Layout::vertical([
-        // bars + the label row + the chart block's two border rows
-        Constraint::Length(CHART_ROWS + 3),
-        Constraint::Length(1), // summary
-        Constraint::Min(0),    // future charts land here
-    ])
-    .split(inner);
 
     // `BarChart` fits bars left-to-right and silently drops the overflow,
     // which would cut off the *newest* weeks — so slice the tail ourselves,
     // using the widget's own fitting arithmetic (see `group_ticks` in
     // ratatui-widgets), and let the oldest weeks be what falls away.
-    let chart_width = chunks[0].width.saturating_sub(2); // block borders
+    let chart_width = chart_area.width.saturating_sub(2); // block borders
     let max_bars = ((chart_width + BAR_GAP) / (BAR_WIDTH + BAR_GAP)) as usize;
     let visible = &freq.weeks[freq.weeks.len().saturating_sub(max_bars.max(1))..];
 
@@ -408,7 +420,7 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
         .block(Block::default().title(" Streams / week ").borders(Borders::ALL))
         .bar_width(BAR_WIDTH)
         .bar_gap(BAR_GAP);
-    frame.render_widget(chart, chunks[0]);
+    frame.render_widget(chart, chart_area);
 
     // The exact numbers the bars can't carry: the partial week called out
     // by name, the average that excludes it, and how far back the data goes.
@@ -420,7 +432,130 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(since) = &freq.since {
         parts.push(format!("{} streams since {since}", freq.total));
     }
-    frame.render_widget(Paragraph::new(parts.join("  ·  ")), chunks[1]);
+    frame.render_widget(Paragraph::new(parts.join("  ·  ")), summary_area);
+}
+
+/// The subscriber/follower trend half. A `Chart` line rather than another
+/// `BarChart`: deltas can be negative (a bad week must be drawable, and
+/// `Bar` values are `u64`), and "which way is it going" is a line question.
+/// The y-axis is zoomed to the data — see `TrendView::y_bounds` — with the
+/// axis labels keeping the zoom honest; the summary line carries the exact
+/// numbers, per the frequency chart's glanceability lesson.
+fn draw_trend_section(frame: &mut Frame, chart_area: Rect, summary_area: Rect, app: &App) {
+    let title = if app.dashboard_metric == "followers" {
+        " Followers "
+    } else {
+        " Subscribers "
+    };
+
+    let trend = match &app.trend_load {
+        LoadState::Loading => {
+            frame.render_widget(Paragraph::new("Loading subscriber history..."), chart_area);
+            return;
+        }
+        LoadState::Failed(msg) => {
+            frame.render_widget(Paragraph::new(format!("Error: {msg}")), chart_area);
+            return;
+        }
+        LoadState::Loaded => app.trend.as_ref(),
+    };
+    let Some(trend) = trend else { return };
+
+    // One point can't make a line. The daily stats poller (backend
+    // scheduler.ts) guarantees this state resolves itself within a day of
+    // a VTuber being registered — say so instead of showing a lone dot.
+    if trend.points.len() < 2 {
+        let msg = match trend.points.len() {
+            0 => "No stat snapshots yet — try s to sync.".to_string(),
+            _ => format!(
+                "Collecting daily snapshots — a trend line needs two days ({} so far).",
+                trend.points.len()
+            ),
+        };
+        frame.render_widget(
+            Paragraph::new(msg)
+                .style(theme::muted())
+                .block(Block::default().title(title).borders(Borders::ALL)),
+            chart_area,
+        );
+        draw_trend_summary(frame, summary_area, app, trend);
+        return;
+    }
+
+    let dataset = Dataset::default()
+        .data(&trend.points)
+        .graph_type(GraphType::Line)
+        // Braille gives 2x4 sub-cell resolution — the smoothest line the
+        // terminal can draw; ratatui falls back to coarser markers only if
+        // asked, and every terminal this targets renders Braille.
+        .marker(symbols::Marker::Braille)
+        .style(theme::chart());
+
+    let [y_min, y_max] = trend.y_bounds;
+    let y_mid = (y_min + y_max) / 2.0;
+    let chart = Chart::new(vec![dataset])
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .x_axis(
+            Axis::default()
+                .bounds(trend.x_bounds)
+                .labels([trend.first_date.clone(), trend.last_date.clone()])
+                .style(theme::muted()),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds(trend.y_bounds)
+                .labels([format_count(y_min), format_count(y_mid), format_count(y_max)])
+                .style(theme::muted()),
+        );
+    frame.render_widget(chart, chart_area);
+
+    draw_trend_summary(frame, summary_area, app, trend);
+}
+
+fn draw_trend_summary(frame: &mut Frame, area: Rect, app: &App, trend: &super::app::TrendView) {
+    let Some(current) = trend.current else { return };
+
+    // Exact digits here, not `format_count`'s compaction — the summary is
+    // where precision lives, the axis labels are where compaction lives.
+    let mut parts = vec![format!("{} {} now", group_thousands(current), app.dashboard_metric)];
+    match (trend.delta7d, trend.delta30d) {
+        (None, None) => parts.push("no 7-day baseline yet".to_string()),
+        (d7, d30) => {
+            if let Some(d) = d7 {
+                parts.push(format!("{d:+} in 7d"));
+            }
+            if let Some(d) = d30 {
+                parts.push(format!("{d:+} in 30d"));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(parts.join("  ·  ")), area);
+}
+
+/// Compact axis-label form: 1532890 → "1.5M", 5913 → "5.9K", 892 → "892".
+/// Lossy on purpose — see `draw_trend_summary` for where exact digits live.
+fn format_count(v: f64) -> String {
+    if v >= 1_000_000.0 {
+        format!("{:.1}M", v / 1_000_000.0)
+    } else if v >= 1_000.0 {
+        format!("{:.1}K", v / 1_000.0)
+    } else {
+        format!("{v:.0}")
+    }
+}
+
+/// 1234567 → "1,234,567". No locale awareness — commas everywhere is fine
+/// for a single-user tool and avoids a formatting crate for one call site.
+fn group_thousands(v: u64) -> String {
+    let digits = v.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Whichever stream currently has focus, full-size, in its own pane below

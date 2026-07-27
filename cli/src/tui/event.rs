@@ -19,9 +19,11 @@ pub enum Command {
     /// as well as once from `accept_detail`'s initial selection, so it's a
     /// standalone `Command` rather than folded into an existing one.
     FetchThumbnail(String),
-    /// `g`'s dashboard data — bucketed stream counts for the selected
-    /// VTuber, by id.
-    FetchFrequency(String),
+    /// `g`'s dashboard data for the selected VTuber. Like `FetchDetail`,
+    /// one conceptual action that `dispatch` fans out into two independent
+    /// background fetches (stream frequency + subscriber trend) — they
+    /// resolve in either order into separate blocks of the same screen.
+    FetchDashboard(String),
     /// Open a VTuber's channel: the URL isn't known yet, `routes` has to
     /// resolve it first.
     OpenProfile(String),
@@ -133,8 +135,11 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Char('g') if matches!(app.screen, Screen::List | Screen::Detail) => {
             let row = app.selected()?;
             let (id, name) = (row.id.clone(), row.name.clone());
-            app.begin_dashboard(id.clone(), name);
-            return Some(Command::FetchFrequency(id));
+            // Twitch calls this number followers, YouTube subscribers —
+            // the dashboard should speak the platform's language.
+            let metric = if row.platform == "Twitch" { "followers" } else { "subscribers" };
+            app.begin_dashboard(id.clone(), name, metric);
+            return Some(Command::FetchDashboard(id));
         }
         // Contextual: on List, `o` opens the VTuber's channel (nothing else
         // to open there). On Detail, it opens whichever stream/clip is

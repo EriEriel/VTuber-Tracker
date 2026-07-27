@@ -408,9 +408,50 @@ pub struct StreamFrequency {
     pub first_stream_at: Option<String>,
 }
 
+/// One daily point of `GET /api/vtubers/:id/stats/subscriber-trend`. `day`
+/// is an integer offset from the response's window start — the backend
+/// computes it so gaps stay proportional on the x-axis without the CLI
+/// touching a calendar; `date` ("YYYY-MM-DD") exists purely for labelling.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrendPoint {
+    pub day: u32,
+    pub date: String,
+    pub subscribers: u64,
+}
+
+/// The trend endpoint's response. Points are SPARSE — a missing day means
+/// "didn't sync", never "zero subscribers" — and the deltas are the
+/// backend's "current vs the newest snapshot at least N days old", `null`
+/// when history is too short to answer honestly.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriberTrend {
+    pub points: Vec<TrendPoint>,
+    #[serde(default)]
+    pub current: Option<u64>,
+    #[serde(default)]
+    pub delta7d: Option<i64>,
+    #[serde(default)]
+    pub delta30d: Option<i64>,
+}
+
+/// Requests the backend's default window (90 days) — same "no parameter
+/// until something needs one" stance as `fetch_stream_frequency` below.
+pub async fn fetch_subscriber_trend(id: &str) -> Result<SubscriberTrend, ApiError> {
+    let client = crate::config::client();
+    let res = client
+        .get(format!("{}/api/vtubers/{id}/stats/subscriber-trend", api_url()))
+        .send()
+        .await?;
+
+    let body = read_body(res).await?;
+    let trend: SubscriberTrend = serde_json::from_str(&body)?;
+    Ok(trend)
+}
+
 /// Requests the backend's defaults (52 weekly buckets) — more than any
-/// terminal renders at once, and the sparkline self-truncates to whatever
-/// fits, so there's nothing useful for a parameter to say yet.
+/// terminal renders at once (`ui.rs` slices the newest weeks that fit), so
+/// there's nothing useful for a parameter to say yet.
 pub async fn fetch_stream_frequency(id: &str) -> Result<StreamFrequency, ApiError> {
     let client = crate::config::client();
     let res = client

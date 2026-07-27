@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config;
-use crate::routes::{ApiError, LiveEntry, StreamFrequency, VtuberDetail};
+use crate::routes::{ApiError, LiveEntry, StreamFrequency, SubscriberTrend, VtuberDetail};
 
 /// What can arrive asynchronously and needs to update `App`. Phase 5 adds
 /// `ActionDone` for the three mutating actions, distinct from `ActionFailed`
@@ -52,6 +52,12 @@ enum Message {
     Frequency {
         id: String,
         result: Result<StreamFrequency, ApiError>,
+    },
+    /// The dashboard's subscriber-trend data — same shape and guard story
+    /// as `Frequency`, resolving independently into its own block.
+    Trend {
+        id: String,
+        result: Result<SubscriberTrend, ApiError>,
     },
     ActionFailed(String),
     ActionDone(Result<String, String>),
@@ -221,10 +227,19 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
                 let _ = tx.send(Message::Thumbnail { url, image }).await;
             });
         }
-        Command::FetchFrequency(id) => {
+        Command::FetchDashboard(id) => {
+            // Two independent tasks, not one chained — same reasoning as
+            // FetchDetail's detail/avatar split: neither block of the
+            // dashboard should wait on the other's round trip.
+            let freq_tx = tx.clone();
+            let freq_id = id.clone();
             tokio::spawn(async move {
-                let result = crate::routes::fetch_stream_frequency(&id).await;
-                let _ = tx.send(Message::Frequency { id, result }).await;
+                let result = crate::routes::fetch_stream_frequency(&freq_id).await;
+                let _ = freq_tx.send(Message::Frequency { id: freq_id, result }).await;
+            });
+            tokio::spawn(async move {
+                let result = crate::routes::fetch_subscriber_trend(&id).await;
+                let _ = tx.send(Message::Trend { id, result }).await;
             });
         }
         Command::OpenProfile(id) => {
@@ -329,6 +344,7 @@ fn handle_message(app: &mut App, message: Message) -> (bool, Option<Command>) {
         }
         Message::Avatar { id, image } => app.accept_avatar(&id, image),
         Message::Frequency { id, result } => app.accept_frequency(&id, result),
+        Message::Trend { id, result } => app.accept_trend(&id, result),
         Message::Thumbnail { url, image } => app.accept_thumbnail(&url, image),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),

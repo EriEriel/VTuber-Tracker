@@ -279,6 +279,73 @@ pub struct EditPayload {
     pub is_tracked: bool,
 }
 
+/// The dashboard's subscriber/follower trend, mapped from
+/// `routes::SubscriberTrend` at the boundary like `FrequencyView` above.
+/// Owns the `(x, y)` pairs because `Dataset::data` borrows a
+/// `&[(f64, f64)]` — `ui.rs` borrows this per frame, converting nothing.
+pub struct TrendView {
+    /// (day offset, subscribers), oldest → newest. Sparse by design: gaps
+    /// between offsets are real "didn't sync" days and stay proportional
+    /// on the x-axis; the line just connects across them.
+    pub points: Vec<(f64, f64)>,
+    pub x_bounds: [f64; 2],
+    /// Zoomed to the data (padded min..max), NOT from zero — subscriber
+    /// counts are nearly flat from zero, and "which way is the line going"
+    /// is the entire question this chart answers. The y-axis labels are
+    /// what keep the zoom honest.
+    pub y_bounds: [f64; 2],
+    /// First/last point dates as "MM-DD", for the x-axis's two labels.
+    pub first_date: String,
+    pub last_date: String,
+    pub current: Option<u64>,
+    pub delta7d: Option<i64>,
+    pub delta30d: Option<i64>,
+}
+
+impl From<crate::routes::SubscriberTrend> for TrendView {
+    fn from(trend: crate::routes::SubscriberTrend) -> Self {
+        let points: Vec<(f64, f64)> = trend
+            .points
+            .iter()
+            .map(|p| (p.day as f64, p.subscribers as f64))
+            .collect();
+
+        let x_bounds = match (points.first(), points.last()) {
+            (Some(first), Some(last)) => [first.0, last.0],
+            // No line gets drawn with <2 points (ui checks), so these
+            // bounds are never actually used — any valid range does.
+            _ => [0.0, 1.0],
+        };
+
+        let min = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let max = points.iter().map(|p| p.1).fold(0.0, f64::max);
+        // 5% headroom keeps the line off the border; the 1.0 floor keeps a
+        // perfectly flat line (min == max, span 0) from collapsing the axis
+        // to a zero-height range. Floor at 0 — a padded lower bound below
+        // zero would label the axis with a negative subscriber count.
+        let pad = ((max - min) * 0.05).max(1.0);
+        let y_bounds = if points.is_empty() {
+            [0.0, 1.0]
+        } else {
+            [(min - pad).max(0.0), max + pad]
+        };
+
+        let short_date =
+            |p: &crate::routes::TrendPoint| p.date.chars().skip(5).take(5).collect::<String>();
+
+        Self {
+            x_bounds,
+            y_bounds,
+            first_date: trend.points.first().map(&short_date).unwrap_or_default(),
+            last_date: trend.points.last().map(&short_date).unwrap_or_default(),
+            points,
+            current: trend.current,
+            delta7d: trend.delta7d,
+            delta30d: trend.delta30d,
+        }
+    }
+}
+
 pub struct App {
     pub items: Vec<VtuberRow>,
     pub list_state: ListState,
@@ -398,6 +465,16 @@ pub struct App {
     /// fetch: close the dashboard and open a different VTuber's before the
     /// first fetch resolves, and the late response no longer matches.
     pending_frequency_id: Option<String>,
+    /// The trend chart's data and load state, exactly mirroring
+    /// `frequency`/`frequency_load` — the two fetches are dispatched
+    /// together by `g` but resolve independently, each into its own block
+    /// of the dashboard.
+    pub trend: Option<TrendView>,
+    pub trend_load: LoadState,
+    /// Same guard as `pending_frequency_id`, for the trend fetch — separate
+    /// because the two responses can arrive in either order (the
+    /// `pending_avatar_id` precedent).
+    pending_trend_id: Option<String>,
     /// Name snapshot for the dashboard's title. Snapshotted at open rather
     /// than re-derived from `selected()` (the confirm-delete modal's
     /// approach) because the live ticker's `ensure_selection_valid` *can*
@@ -405,6 +482,11 @@ pub struct App {
     /// exclusive is what makes re-deriving safe there, and that argument
     /// doesn't hold here.
     pub dashboard_name: String,
+    /// "followers" (Twitch) or "subscribers" (YouTube) — the platforms name
+    /// the same number differently, and the trend block's title and summary
+    /// should speak the platform's language. Snapshotted with
+    /// `dashboard_name` for the same reason.
+    pub dashboard_metric: &'static str,
     /// Where `Esc`/`h` lands from the dashboard — `List` or `Detail`,
     /// whichever it was opened from. Detail's state is untouched while the
     /// dashboard is up, so returning is just a screen switch.
@@ -465,7 +547,11 @@ impl App {
             frequency: None,
             frequency_load: LoadState::Loading,
             pending_frequency_id: None,
+            trend: None,
+            trend_load: LoadState::Loading,
+            pending_trend_id: None,
             dashboard_name: String::new(),
+            dashboard_metric: "subscribers",
             dashboard_return: Screen::List,
             status: None,
             pending: 0,
@@ -626,13 +712,17 @@ impl App {
 
     /// Opens the dashboard for the selected VTuber, remembering the screen
     /// it was opened from so `close_dashboard` can return there.
-    pub fn begin_dashboard(&mut self, id: String, name: String) {
+    pub fn begin_dashboard(&mut self, id: String, name: String, metric: &'static str) {
         self.dashboard_return = self.screen;
         self.screen = Screen::Dashboard;
         self.frequency = None;
         self.frequency_load = LoadState::Loading;
-        self.pending_frequency_id = Some(id);
+        self.pending_frequency_id = Some(id.clone());
+        self.trend = None;
+        self.trend_load = LoadState::Loading;
+        self.pending_trend_id = Some(id);
         self.dashboard_name = name;
+        self.dashboard_metric = metric;
         self.status = None;
     }
 
@@ -659,6 +749,25 @@ impl App {
                 self.frequency_load = LoadState::Loaded;
             }
             Err(e) => self.frequency_load = LoadState::Failed(e.to_string()),
+        }
+    }
+
+    /// `accept_frequency`'s twin for the trend fetch, with its own guard.
+    pub fn accept_trend(
+        &mut self,
+        id: &str,
+        result: Result<crate::routes::SubscriberTrend, crate::routes::ApiError>,
+    ) {
+        if self.pending_trend_id.as_deref() != Some(id) {
+            return;
+        }
+        self.pending_trend_id = None;
+        match result {
+            Ok(trend) => {
+                self.trend = Some(trend.into());
+                self.trend_load = LoadState::Loaded;
+            }
+            Err(e) => self.trend_load = LoadState::Failed(e.to_string()),
         }
     }
 
