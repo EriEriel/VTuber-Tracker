@@ -18,7 +18,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config;
-use crate::routes::{ApiError, LiveEntry, StreamFrequency, SubscriberTrend, VtuberDetail};
+use crate::routes::{
+    ApiError, DurationTrend, LiveEntry, StreamFrequency, SubscriberTrend, VtuberDetail,
+};
 
 /// What can arrive asynchronously and needs to update `App`. Phase 5 adds
 /// `ActionDone` for the three mutating actions, distinct from `ActionFailed`
@@ -58,6 +60,11 @@ enum Message {
     Trend {
         id: String,
         result: Result<SubscriberTrend, ApiError>,
+    },
+    /// The dashboard's median-duration data — third of the trio.
+    Duration {
+        id: String,
+        result: Result<DurationTrend, ApiError>,
     },
     ActionFailed(String),
     ActionDone(Result<String, String>),
@@ -228,14 +235,20 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
             });
         }
         Command::FetchDashboard(id) => {
-            // Two independent tasks, not one chained — same reasoning as
-            // FetchDetail's detail/avatar split: neither block of the
-            // dashboard should wait on the other's round trip.
+            // Independent tasks, not one chained — same reasoning as
+            // FetchDetail's detail/avatar split: no block of the dashboard
+            // should wait on another's round trip.
             let freq_tx = tx.clone();
             let freq_id = id.clone();
             tokio::spawn(async move {
                 let result = crate::routes::fetch_stream_frequency(&freq_id).await;
                 let _ = freq_tx.send(Message::Frequency { id: freq_id, result }).await;
+            });
+            let dur_tx = tx.clone();
+            let dur_id = id.clone();
+            tokio::spawn(async move {
+                let result = crate::routes::fetch_duration_trend(&dur_id).await;
+                let _ = dur_tx.send(Message::Duration { id: dur_id, result }).await;
             });
             tokio::spawn(async move {
                 let result = crate::routes::fetch_subscriber_trend(&id).await;
@@ -345,6 +358,7 @@ fn handle_message(app: &mut App, message: Message) -> (bool, Option<Command>) {
         Message::Avatar { id, image } => app.accept_avatar(&id, image),
         Message::Frequency { id, result } => app.accept_frequency(&id, result),
         Message::Trend { id, result } => app.accept_trend(&id, result),
+        Message::Duration { id, result } => app.accept_duration(&id, result),
         Message::Thumbnail { url, image } => app.accept_thumbnail(&url, image),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),

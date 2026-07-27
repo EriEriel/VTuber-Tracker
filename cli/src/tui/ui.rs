@@ -347,16 +347,116 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     let chunks = Layout::vertical([
-        // frequency: bars + the label row + the chart block's two border rows
+        // top band: bars + the label row + the chart blocks' border rows
         Constraint::Length(CHART_ROWS + 3),
-        Constraint::Length(1), // frequency summary
+        Constraint::Length(1), // top-band summaries
         Constraint::Min(8),    // trend chart — flexes with terminal height
         Constraint::Length(1), // trend summary
     ])
     .split(inner);
 
-    draw_frequency_section(frame, chunks[0], chunks[1], app);
+    // Frequency and duration share the top band side by side: both are
+    // weekly BarCharts over the same `bucketWindow` buckets (they end at
+    // the current week and virtually always start at the same one), so
+    // their columns line up and read as two facets of the same weeks.
+    // This is also what keeps three charts inside a 24-row terminal.
+    let halves = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]);
+    let charts = halves.split(chunks[0]);
+    let summaries = halves.split(chunks[1]);
+
+    draw_frequency_section(frame, charts[0], summaries[0], app);
+    draw_duration_section(frame, charts[1], summaries[1], app);
     draw_trend_section(frame, chunks[2], chunks[3], app);
+}
+
+/// The duration half of the top band: median stream length per week, same
+/// week buckets (and week labels) as the frequency chart beside it. A
+/// `None` median renders as a zero-height bar captioned `—` — "no
+/// qualifying streams" is not "streamed 0 hours", and the backend already
+/// filtered sub-10-minute Shorts/uploads out of "qualifying".
+fn draw_duration_section(frame: &mut Frame, chart_area: Rect, summary_area: Rect, app: &App) {
+    let dur = match &app.duration_load {
+        LoadState::Loading => {
+            frame.render_widget(Paragraph::new("Loading durations..."), chart_area);
+            return;
+        }
+        LoadState::Failed(msg) => {
+            frame.render_widget(Paragraph::new(format!("Error: {msg}")), chart_area);
+            return;
+        }
+        LoadState::Loaded => app.duration.as_ref(),
+    };
+    let Some(dur) = dur else { return };
+
+    if dur.weeks.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No streams of 10+ minutes recorded yet.").style(theme::muted()),
+            chart_area,
+        );
+        return;
+    }
+
+    // Same newest-weeks-win tail slice as the frequency chart.
+    let chart_width = chart_area.width.saturating_sub(2);
+    let max_bars = ((chart_width + BAR_GAP) / (BAR_WIDTH + BAR_GAP)) as usize;
+    let visible = &dur.weeks[dur.weeks.len().saturating_sub(max_bars.max(1))..];
+
+    let bars: Vec<Bar> = visible
+        .iter()
+        .map(|w| {
+            let (style, label) = if w.partial {
+                (theme::muted(), Line::styled("now", theme::muted()))
+            } else {
+                (theme::duration_chart(), Line::raw(w.label.clone()))
+            };
+            match w.median_secs {
+                // Bar height in minutes (u64), caption in h/m — the bar
+                // scales, the text says the number.
+                Some(secs) => Bar::with_label(label, secs.div_ceil(60))
+                    .text_value(format_duration_short(secs))
+                    .style(style)
+                    .value_style(style.add_modifier(Modifier::REVERSED)),
+                None => Bar::with_label(label, 0)
+                    .text_value("—".to_string())
+                    .style(theme::muted())
+                    .value_style(theme::muted()),
+            }
+        })
+        .collect();
+
+    let chart = BarChart::new(bars)
+        .block(Block::default().title(" Median duration ").borders(Borders::ALL))
+        .bar_width(BAR_WIDTH)
+        .bar_gap(BAR_GAP);
+    frame.render_widget(chart, chart_area);
+
+    let Some(overall) = dur.overall_median else {
+        frame.render_widget(
+            Paragraph::new("no qualifying streams yet").style(theme::muted()),
+            summary_area,
+        );
+        return;
+    };
+    let mut parts = vec![format!("median {}/stream", format_duration(overall))];
+    if let Some(longest) = dur.longest {
+        parts.push(format!("longest {}", format_duration(longest)));
+    }
+    frame.render_widget(Paragraph::new(parts.join("  ·  ")), summary_area);
+}
+
+/// "2h49m" / "55m" — summary form.
+fn format_duration(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h > 0 { format!("{h}h{m:02}m") } else { format!("{m}m") }
+}
+
+/// "2h49" / "55m" — bar-caption form, kept ≤`BAR_WIDTH` chars so the
+/// caption never overhangs its bar.
+fn format_duration_short(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h > 0 { format!("{h}h{m:02}") } else { format!("{m}m") }
 }
 
 /// The frequency half of the dashboard: a labelled `BarChart`, not a

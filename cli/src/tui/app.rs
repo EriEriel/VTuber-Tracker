@@ -279,6 +279,65 @@ pub struct EditPayload {
     pub is_tracked: bool,
 }
 
+/// One weekly bucket of the duration chart.
+pub struct DurationBar {
+    /// "MM-DD" bucket-start date, or "now" handled at render time.
+    pub label: String,
+    /// Median duration in seconds; `None` = no qualifying stream that week,
+    /// rendered as an em-dash bar rather than a zero-height one — "didn't
+    /// stream" is not "streamed for 0 hours".
+    pub median_secs: Option<u64>,
+    /// The current, still-accumulating week. The median itself isn't
+    /// partial-biased the way a count is (each sample is a completed
+    /// stream), but it can still shift as the week adds streams — dimmed
+    /// like the frequency chart's `now` bar so "dim = not final yet" stays
+    /// one consistent rule across the side-by-side pair.
+    pub partial: bool,
+}
+
+/// The dashboard's median-duration chart, mapped like `FrequencyView`.
+pub struct DurationView {
+    /// Weekly buckets, oldest → newest, trimmed of leading no-data weeks
+    /// (`counts == 0` before the first qualifying stream — pre-tracking
+    /// weeks plus any leading all-Shorts weeks). Both this and
+    /// `FrequencyView::weeks` end at the current bucket and almost always
+    /// start at the same week, which is what keeps the two side-by-side
+    /// charts' columns lined up; `ui.rs` slices the same-width tail of
+    /// each.
+    pub weeks: Vec<DurationBar>,
+    pub overall_median: Option<u64>,
+    pub longest: Option<u64>,
+}
+
+impl From<crate::routes::DurationTrend> for DurationView {
+    fn from(trend: crate::routes::DurationTrend) -> Self {
+        let first = trend
+            .counts
+            .iter()
+            .position(|&c| c > 0)
+            .unwrap_or(trend.medians.len());
+        let last = trend.medians.len().saturating_sub(1);
+
+        let weeks = (first..trend.medians.len())
+            .map(|i| DurationBar {
+                label: trend
+                    .starts
+                    .get(i)
+                    .map(|s| s.chars().skip(5).take(5).collect())
+                    .unwrap_or_default(),
+                median_secs: trend.medians.get(i).copied().flatten(),
+                partial: i == last,
+            })
+            .collect();
+
+        Self {
+            weeks,
+            overall_median: trend.overall_median,
+            longest: trend.longest,
+        }
+    }
+}
+
 /// The dashboard's subscriber/follower trend, mapped from
 /// `routes::SubscriberTrend` at the boundary like `FrequencyView` above.
 /// Owns the `(x, y)` pairs because `Dataset::data` borrows a
@@ -471,6 +530,10 @@ pub struct App {
     /// of the dashboard.
     pub trend: Option<TrendView>,
     pub trend_load: LoadState,
+    /// The duration chart's trio, same story as `trend` above.
+    pub duration: Option<DurationView>,
+    pub duration_load: LoadState,
+    pending_duration_id: Option<String>,
     /// Same guard as `pending_frequency_id`, for the trend fetch — separate
     /// because the two responses can arrive in either order (the
     /// `pending_avatar_id` precedent).
@@ -550,6 +613,9 @@ impl App {
             trend: None,
             trend_load: LoadState::Loading,
             pending_trend_id: None,
+            duration: None,
+            duration_load: LoadState::Loading,
+            pending_duration_id: None,
             dashboard_name: String::new(),
             dashboard_metric: "subscribers",
             dashboard_return: Screen::List,
@@ -720,7 +786,10 @@ impl App {
         self.pending_frequency_id = Some(id.clone());
         self.trend = None;
         self.trend_load = LoadState::Loading;
-        self.pending_trend_id = Some(id);
+        self.pending_trend_id = Some(id.clone());
+        self.duration = None;
+        self.duration_load = LoadState::Loading;
+        self.pending_duration_id = Some(id);
         self.dashboard_name = name;
         self.dashboard_metric = metric;
         self.status = None;
@@ -768,6 +837,25 @@ impl App {
                 self.trend_load = LoadState::Loaded;
             }
             Err(e) => self.trend_load = LoadState::Failed(e.to_string()),
+        }
+    }
+
+    /// Third of the dashboard's accept trio, same guard pattern.
+    pub fn accept_duration(
+        &mut self,
+        id: &str,
+        result: Result<crate::routes::DurationTrend, crate::routes::ApiError>,
+    ) {
+        if self.pending_duration_id.as_deref() != Some(id) {
+            return;
+        }
+        self.pending_duration_id = None;
+        match result {
+            Ok(trend) => {
+                self.duration = Some(trend.into());
+                self.duration_load = LoadState::Loaded;
+            }
+            Err(e) => self.duration_load = LoadState::Failed(e.to_string()),
         }
     }
 

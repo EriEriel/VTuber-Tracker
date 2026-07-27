@@ -435,6 +435,40 @@ pub struct SubscriberTrend {
     pub delta30d: Option<i64>,
 }
 
+/// `GET /api/vtubers/:id/stats/duration-trend` — median stream duration per
+/// weekly bucket, in seconds. Medians are `None` for buckets with no
+/// qualifying stream (the backend filters out sub-10-minute "streams" —
+/// YouTube Shorts/uploads stored as Stream docs — and null durations), and
+/// "no qualifying streams" is not the same statement as "0 hours".
+/// `counts` is parallel and exists so the mapper can tell pre-tracking
+/// buckets from quiet ones when trimming.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurationTrend {
+    pub medians: Vec<Option<u64>>,
+    pub counts: Vec<u64>,
+    /// Bucket-start dates, parallel to `medians` — same cross-version
+    /// `default` stance as `StreamFrequency::starts`.
+    #[serde(default)]
+    pub starts: Vec<String>,
+    #[serde(default)]
+    pub overall_median: Option<u64>,
+    #[serde(default)]
+    pub longest: Option<u64>,
+}
+
+pub async fn fetch_duration_trend(id: &str) -> Result<DurationTrend, ApiError> {
+    let client = crate::config::client();
+    let res = client
+        .get(format!("{}/api/vtubers/{id}/stats/duration-trend", api_url()))
+        .send()
+        .await?;
+
+    let body = read_body(res).await?;
+    let trend: DurationTrend = serde_json::from_str(&body)?;
+    Ok(trend)
+}
+
 /// Requests the backend's default window (90 days) — same "no parameter
 /// until something needs one" stance as `fetch_stream_frequency` below.
 pub async fn fetch_subscriber_trend(id: &str) -> Result<SubscriberTrend, ApiError> {

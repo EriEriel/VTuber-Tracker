@@ -71,6 +71,16 @@ pub fn chart() -> Style {
     Style::default().fg(Color::Cyan)
 }
 
+/// The median-duration chart's bars. Its own colour, not `chart()`'s cyan:
+/// it sits directly beside the frequency chart with identical bar geometry
+/// and week labels, and per user feedback the two needed to be tell-apart
+/// at a glance — same-colour twins read as one wide chart. Magenta because
+/// it carries no existing meaning in either theme file (green = live,
+/// yellow = upcoming, blue = URLs, cyan = names/charts).
+pub fn duration_chart() -> Style {
+    Style::default().fg(Color::Magenta)
+}
+
 /// The list's `LIVE` badge for a VTuber Phase 7's ticker just flagged as
 /// `WentLive`/`BurstWentLive` this poll, not merely still-live from before.
 /// Same green as `live_status`, plus `REVERSED` to stand out from every
