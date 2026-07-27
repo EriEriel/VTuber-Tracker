@@ -189,8 +189,28 @@ fn draw_hints_bar(frame: &mut Frame, area: Rect, app: &App) {
             Screen::Modal(ModalKind::Edit) => "Tab/↑↓ field · Space toggle · Enter save · Esc cancel",
         }
     };
-    let p = Paragraph::new(truncate_with_ellipsis(hints, area.width as usize)).style(theme::muted());
-    frame.render_widget(p, area);
+    // Carve a fixed-width slot off the right for the version rather than
+    // just appending it to `hints` — appending would make truncation eat
+    // into the version string first on a narrow terminal, when the key
+    // hints are what actually matter there.
+    let version = concat!("v", env!("CARGO_PKG_VERSION"));
+    let version_width = version.chars().count() as u16;
+    let chunks = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(version_width),
+    ])
+    .split(area);
+    let (hints_area, version_area) = (chunks[0], chunks[2]);
+
+    let p = Paragraph::new(truncate_with_ellipsis(hints, hints_area.width as usize))
+        .style(theme::muted());
+    frame.render_widget(p, hints_area);
+    // `Style::default()`, not `theme::muted()` — every `Block` in this file
+    // leaves `border_style` unset (bar the focused/unfocused stream-clip
+    // pane), so `Style::default()` *is* "the border colour" everywhere else
+    // on screen. Matching it, not the dim hint text next to it.
+    frame.render_widget(Paragraph::new(version).style(Style::default()), version_area);
 }
 
 /// Hints run up to ~110 chars; a narrow terminal (or a split pane) leaves
