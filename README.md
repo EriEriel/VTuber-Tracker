@@ -237,7 +237,7 @@ Live badges refresh on their own, on the same `watch_interval_secs` config `oshi
 </tr>
 </table>
 
-Thumbnails aren't rendered inside the TUI yet — `viuer` writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame; see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md) for the full phase-by-phase design history and the trap notes. A dashboard/charts screen (Phase 8) is planned but deferred.
+The Detail screen shows the VTuber's avatar beside its name, and a focus-following preview pane below the streams/clips lists renders whichever stream is currently selected — `viuer` (used for the plain CLI's thumbnails above) writes graphics escapes straight at the cursor, which conflicts with ratatui repainting every cell each frame, so the TUI uses the `ratatui-image` crate instead. See [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md)'s Phase 7.5 for the full design. A dashboard/charts screen (Phase 8) is planned but deferred.
 
 ### Stack
 
@@ -245,7 +245,8 @@ Thumbnails aren't rendered inside the TUI yet — `viuer` writes graphics escape
 - `reqwest` — HTTP client
 - `serde` / `serde_json` — JSON (de)serialization
 - `tokio` — async runtime
-- `viuer` / `image` — inline terminal thumbnails (kitty/iTerm/Sixel, with a block-character fallback)
+- `viuer` / `image` — inline terminal thumbnails for the plain CLI (kitty/iTerm/Sixel, with a block-character fallback)
+- `ratatui-image` — the TUI's own image widget, since `viuer` can't coexist with ratatui's per-frame repaint
 - `crossterm` — cursor control, for placing thumbnails beside text
 - `toml` / `dirs` — config file
 - `open` — opens URLs in the default browser
@@ -338,9 +339,10 @@ CLI coverage of the backend:
 - [x] Configurable backend URL and auth token
 - [x] Desktop notifications on going live via `watch`
 - [x] Full-screen TUI (`tui`) — v0.1 complete: list, detail, live, search/filter, create/sync/delete/edit, auto-refresh
+- [x] TUI Detail avatar and stream thumbnail preview via `ratatui-image` (Phase 7.5)
 
 Known gaps:
 
 - No one-shot `update` subcommand — `PUT /api/vtubers/:id` is only reachable through the TUI.
 - `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify; same is true of two TUI sessions polling live status independently.
-- TUI thumbnails and a dashboard/charts screen (Phase 8) are planned but not started — see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md).
+- TUI images (avatar + stream preview) only render on the Detail screen, not on List rows — a deliberate scope cut, not a bug. A dashboard/charts screen (Phase 8) is planned but not started — see [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md).

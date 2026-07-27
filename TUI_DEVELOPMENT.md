@@ -1,8 +1,11 @@
 # TUI development — plan and running checklist
 
-Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5 (polish /
-thumbnails) and Phase 8 (dashboard) both deferred to a future release.
-Branch `tui`.
+Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5's
+thumbnails (VTuber avatar in Detail's header, plus a focus-following stream
+preview pane) have landed; its general polish pass stays open-ended by
+design, new small fixes just get added to it rather than closing the phase.
+Phase 8 (dashboard) remains deferred to a future release. Developed directly
+on `main`, not a separate `tui` branch.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -95,9 +98,12 @@ concept keeps the same colour in both files*, and both get updated together.
 directly at the cursor position; ratatui repaints every cell each frame with no
 idea those cells are occupied. `routes::print_thumbnail` and
 `print_stream_thumbnail` therefore **cannot be called from inside the TUI**.
-Images need either the `ratatui-image` crate (a real widget that participates
-in the buffer) or halfblock characters decoded via the already-present `image`
-crate. See Phase 2.
+**Resolved in Phase 7.5** via the `ratatui-image` crate instead: `Picker`
+probes terminal capability once at startup, and `Picker::new_protocol` bakes
+a decoded image into a `Protocol` that's a real widget participating in
+ratatui's buffer, not a side-channel escape sequence. Halfblocks were the
+fallback under consideration here — not needed, `ratatui-image` supports them
+itself when no richer protocol is detected.
 
 **`run_loop` is sync and blocks the tokio runtime.** Fine while the only fetch
 happens before the loop starts. The moment anything fetches *during* the loop,
@@ -281,6 +287,8 @@ used (see Traps). The options are `ratatui-image`, or halfblocks via the
 `image` crate already in the tree. Images are the single most likely thing to
 make the whole view look broken, so they get their own phase later rather than
 blocking the rest of the mapping. `cli/IMAGE_RENDERING.md` has background.
+Landed in Phase 7.5 via `ratatui-image` — see that phase for the avatar and
+stream-preview design.
 
 ### Open URL per stream/clip
 
@@ -524,20 +532,47 @@ badge. VTubers already live at startup never got the highlight.
 
 ---
 
-# Phase 7.5 — Polish & thumbnails (in progress)
+# Phase 7.5 — Polish & thumbnails (thumbnails done; polish stays open-ended)
 
 A holding pen for this doc rather than an open-ended Known gaps list growing
-without a home. Two things belong here before Phase 8:
+without a home. Both things slated for it before Phase 8 have landed; new
+small UX fixes still belong under **General polish pass** below rather than
+opening a one-off phase per fix.
 
-- [ ] **Thumbnails inside the TUI.** `lookup`/`live` render them via `viuer`,
-      which writes graphics escapes straight at wherever the cursor sits.
-      Ratatui repaints every cell from a fresh buffer each frame and has no
-      idea those cells hold an image — the two can't currently coexist (see
-      Traps). Needs an actual design pass: either a redraw-aware image crate
-      (`ratatui-image` is the obvious candidate to evaluate first) or a
-      half-block/ANSI-art approach drawn as ordinary styled cells so ratatui
-      owns every pixel it's responsible for. Not investigated yet — this
-      entry is the placeholder to come back to, not a design decision.
+- [x] **Thumbnails inside the TUI.** `lookup`/`live` render them via `viuer`,
+      which writes graphics escapes straight at wherever the cursor sits —
+      incompatible with ratatui's per-frame repaint (see Traps). Solved with
+      the `ratatui-image` crate rather than hand-rolled halfblocks: its
+      `Picker` probes terminal capability once at startup, and
+      `Picker::new_protocol` bakes a decoded image into a `Protocol` that's a
+      real widget participating in ratatui's buffer — including its own
+      halfblock fallback when no richer protocol is detected, so nothing
+      hand-rolled was needed after all. Landed in two pieces, reviewed by
+      running:
+    - [x] **VTuber avatar** in Detail's header (`c7abfd1`). `Enter` now
+          dispatches the avatar fetch as an independent task alongside the
+          existing detail fetch (`Command::FetchDetail` gained a `photo`
+          field so `dispatch` doesn't need `&App` to find it), using the same
+          token-free `external_client()` `print_thumbnail` already uses.
+          `App::accept_avatar` has its own `pending_avatar_id` guard,
+          separate from `pending_detail_id`, since the two fetches can
+          resolve in either order. Deliberately Detail-only for this pass,
+          not also on List rows — smallest surface area to validate the
+          integration before a harder scrolling case.
+    - [x] **Stream thumbnail preview** (`efbfae3`). Per-row thumbnails inside
+          the streams/clips `List` widgets turned out not to be viable at
+          all: each row is a single `Line` (one terminal row), nowhere near
+          enough height for an image to read as anything, and `ratatui::List`
+          has no supported way to embed a stateful widget in one row anyway.
+          Built a single focus-following preview pane below the lists
+          instead (the `fzf --preview`/file-manager pattern), reusing the
+          avatar's exact fetch/guard/render shape rather than inventing a
+          second one — `Command::FetchThumbnail` triggers on `j`/`k`/`Tab`
+          focus changes, `App::thumbnail_cache` is keyed by thumbnail URL and
+          cleared per-VTuber in `begin_detail` (naturally bounded, no
+          eviction policy needed). Clips have no `thumbnailUrl` on the
+          backend at all (`routes::ClipInfo`), so the pane just goes blank
+          with Clips focused — nothing missing, nothing to show.
 - [x] **General polish pass.** Catching small UX rough edges as they turn up
       rather than opening a one-off phase per fix. Landed so far, all
       reviewed by running:
@@ -566,8 +601,11 @@ without a home. Two things belong here before Phase 8:
           unstyled border colour used everywhere else in the TUI, not
           `theme::muted()`'s dim hint-text colour.
 
-Deliberately light on detail for thumbnails — the point right now is
-reserving the slot before Phase 8, not committing to a design.
+**Review:** open a VTuber with a photo and streams — the avatar appears
+beside the header text once its fetch resolves; arrowing through streams
+updates the preview pane live, is instant on an already-seen row (cache
+hit), and blanks out on `Tab` to Clips; backing out to List and opening a
+different VTuber shows neither the old avatar nor the old preview.
 
 ---
 
@@ -592,8 +630,10 @@ it once picked back up.
 
 ## Known gaps
 
-- Thumbnails are absent from the TUI entirely, pending the `ratatui-image` vs
-  halfblocks decision (Phase 2).
+- Avatars/thumbnails only render on the Detail screen (header avatar, focused
+  stream's preview pane) — List rows stay text-only. Deliberate scope for
+  Phase 7.5, not a bug: validating `ratatui-image` against one static image
+  first, before a scrolling list of N.
 - The TUI filters on `isTracked` where `oshihub list` does not. The counts
   happen to match today because everything in the database is tracked.
 - No lock, same as `watch` — nothing stops two TUI instances, or a TUI
