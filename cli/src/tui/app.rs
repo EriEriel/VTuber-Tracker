@@ -20,6 +20,11 @@ use crate::watch::{self, WatchState};
 pub const AVATAR_COLS: u16 = 16;
 pub const AVATAR_ROWS: u16 = 8;
 
+/// Same idea as `AVATAR_COLS`/`AVATAR_ROWS`, sized wider rather than square —
+/// stream thumbnails are landscape (YouTube/Twitch previews), not avatars.
+pub const THUMB_COLS: u16 = 28;
+pub const THUMB_ROWS: u16 = 8;
+
 /// Minimal shape for what the list *and* detail screens need.
 /// Map existing API DTO into this at the boundary (same mapper-at-the-
 /// boundary pattern you used on the Hono backend) — don't let the raw API
@@ -235,6 +240,22 @@ pub struct App {
     /// drop every avatar that happens to resolve afterward, not just
     /// genuinely stale ones.
     pending_avatar_id: Option<String>,
+    /// The focused stream's thumbnail, mirroring `avatar` above but keyed
+    /// to *which stream/clip has focus* rather than which VTuber is
+    /// selected. `None` whenever focus is on Clips (the backend has no
+    /// `thumbnailUrl` for clips at all, see `routes::ClipInfo`) or the
+    /// focused stream has none.
+    pub thumbnail: Option<Protocol>,
+    /// Keyed by thumbnail URL rather than a stream id — nothing upstream of
+    /// this needs a dedicated stream identity, and the URL is already the
+    /// natural unique key for "have we already decoded this image." Cleared
+    /// in `begin_detail`, so it's naturally bounded to one VTuber's worth of
+    /// streams rather than growing across the whole session.
+    thumbnail_cache: HashMap<String, Protocol>,
+    /// Same role as `pending_avatar_id`, but for `thumbnail` — also keyed by
+    /// URL, since focus can move (and a fetch can be re-triggered) faster
+    /// than a slow request resolves.
+    pending_thumbnail_id: Option<String>,
     pub detail_focus: DetailFocus,
     pub stream_state: ListState,
     pub clip_state: ListState,
@@ -320,6 +341,9 @@ impl App {
             pending_detail_id: None,
             avatar: None,
             pending_avatar_id: None,
+            thumbnail: None,
+            thumbnail_cache: HashMap::new(),
+            pending_thumbnail_id: None,
             detail_focus: DetailFocus::Streams,
             stream_state: ListState::default(),
             clip_state: ListState::default(),
@@ -479,6 +503,9 @@ impl App {
         self.detail_load = LoadState::Loading;
         self.avatar = None;
         self.pending_avatar_id = Some(id.clone());
+        self.thumbnail = None;
+        self.thumbnail_cache.clear();
+        self.pending_thumbnail_id = None;
         self.pending_detail_id = Some(id);
         self.detail_focus = DetailFocus::Streams;
         self.stream_state = ListState::default();
@@ -711,6 +738,61 @@ impl App {
                 detail.clips.get(i).map(|c| c.url.clone())
             }
         }
+    }
+
+    /// The focused stream's thumbnail URL. Always `None` for Clips —
+    /// `routes::ClipInfo` has no `thumbnailUrl` field at all, the backend
+    /// doesn't send one for clips.
+    fn focused_thumbnail_url(&self) -> Option<String> {
+        let detail = self.detail.as_ref()?;
+        match self.detail_focus {
+            DetailFocus::Streams => {
+                let i = self.stream_state.selected()?;
+                detail.streams.get(i)?.thumbnail_url.clone()
+            }
+            DetailFocus::Clips => None,
+        }
+    }
+
+    /// Call after any focus change (`detail_next`/`detail_previous`/
+    /// `toggle_detail_focus`, and once from `accept_detail` for the initial
+    /// selection). Updates `self.thumbnail` immediately — from the cache if
+    /// this URL was already fetched, or to `None` while a fresh one is in
+    /// flight, so the *previous* stream's thumbnail never lingers on screen
+    /// under a new selection. Returns the URL to fetch, if a fetch is
+    /// actually needed.
+    pub fn sync_thumbnail_focus(&mut self) -> Option<String> {
+        let url = self.focused_thumbnail_url();
+        self.thumbnail = url.as_ref().and_then(|u| self.thumbnail_cache.get(u).cloned());
+        match url {
+            Some(url) if !self.thumbnail_cache.contains_key(&url) => {
+                self.pending_thumbnail_id = Some(url.clone());
+                Some(url)
+            }
+            _ => {
+                self.pending_thumbnail_id = None;
+                None
+            }
+        }
+    }
+
+    /// Applies a decoded thumbnail, unless focus has since moved to a
+    /// different stream (see `pending_thumbnail_id`). Successfully decoded
+    /// images are cached by URL so arrowing back over an already-seen
+    /// stream is instant and doesn't re-fetch.
+    pub fn accept_thumbnail(&mut self, url: &str, image: Option<image::DynamicImage>) {
+        if self.pending_thumbnail_id.as_deref() != Some(url) {
+            return;
+        }
+        self.pending_thumbnail_id = None;
+        let Some(protocol) = image.and_then(|img| {
+            let size = Size { width: THUMB_COLS, height: THUMB_ROWS };
+            self.picker.as_ref()?.new_protocol(img, size, Resize::Fit(None)).ok()
+        }) else {
+            return;
+        };
+        self.thumbnail_cache.insert(url.to_string(), protocol.clone());
+        self.thumbnail = Some(protocol);
     }
 
     pub fn set_items(&mut self, items: Vec<VtuberRow>) {

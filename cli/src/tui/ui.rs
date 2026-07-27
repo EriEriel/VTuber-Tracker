@@ -7,7 +7,10 @@ use ratatui::{
 };
 use ratatui_image::Image;
 
-use super::app::{App, DetailFocus, EditField, LoadState, ModalKind, Screen, AVATAR_COLS, AVATAR_ROWS};
+use super::app::{
+    App, DetailFocus, EditField, LoadState, ModalKind, Screen, AVATAR_COLS, AVATAR_ROWS, THUMB_COLS,
+    THUMB_ROWS,
+};
 use super::theme;
 use crate::routes::VtuberDetail;
 
@@ -306,12 +309,49 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(header_height),
         Constraint::Percentage(50),
         Constraint::Percentage(50),
+        Constraint::Length(THUMB_ROWS + 2), // +2 for the block's borders
     ])
     .split(area);
 
     draw_detail_header(frame, chunks[0], header_lines, app);
     draw_stream_list(frame, chunks[1], detail, app);
     draw_clip_list(frame, chunks[2], detail, app);
+    draw_thumbnail_preview(frame, chunks[3], app);
+}
+
+/// Whichever stream currently has focus, full-size, in its own pane below
+/// the streams/clips lists — not inline per row. Each `ListItem` there is a
+/// single `Line` (one terminal row), nowhere near enough height for an
+/// image to read as anything but noise, and `ratatui::List` has no supported
+/// way to embed a stateful widget in one row anyway. One larger preview tied
+/// to focus (the same pattern `fzf --preview`/file managers use) avoids
+/// both problems at once, and reuses the exact fetch/cache/render pipeline
+/// `avatar` already established — see `App::sync_thumbnail_focus`.
+fn draw_thumbnail_preview(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default().title(" Preview ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Blank when nothing's focused, focus is on Clips (no `thumbnailUrl` on
+    // the backend at all — see `App::focused_thumbnail_url`), or a fetch is
+    // still in flight. Same "just don't render" degrade as the avatar slot,
+    // no separate loading/empty state to draw.
+    let Some(thumb) = &app.thumbnail else { return };
+
+    // Centered at exactly `THUMB_COLS` wide — the pane itself is as wide as
+    // Detail's whole content area, but `Picker::new_protocol` baked the
+    // `Protocol` for `THUMB_COLS`x`THUMB_ROWS` in `App::accept_thumbnail`.
+    // Handing it a wider `Rect` here wouldn't stretch the image to fill it;
+    // it'd just leave the baked-size image sitting in one corner instead of
+    // centered.
+    let side = inner.width.saturating_sub(THUMB_COLS) / 2;
+    let cols = Layout::horizontal([
+        Constraint::Length(side),
+        Constraint::Length(THUMB_COLS),
+        Constraint::Min(0),
+    ])
+    .split(inner);
+    frame.render_widget(Image::new(thumb), cols[1]);
 }
 
 /// Renders the " VTuber Detail " block, splitting its inner area between a

@@ -41,6 +41,12 @@ enum Message {
         id: String,
         image: Option<image::DynamicImage>,
     },
+    /// Same "no error state, `None` says everything a `Result` would" shape
+    /// as `Avatar` — keyed by thumbnail URL, matching `App::pending_thumbnail_id`.
+    Thumbnail {
+        url: String,
+        image: Option<image::DynamicImage>,
+    },
     ActionFailed(String),
     ActionDone(Result<String, String>),
 }
@@ -157,12 +163,18 @@ async fn run_loop(
                 }
             }
             Some(message) = rx.recv() => {
-                // A successful sync/delete/create leaves the list stale —
-                // `handle_message` reports that back as a bool rather than
-                // taking `tx` itself, so it stays a plain `&mut App`
-                // mutator like every other message handler here.
-                if handle_message(app, message) {
+                // A successful sync/delete/create leaves the list stale, and
+                // a detail load can hand back a follow-up thumbnail fetch
+                // for its initial selection — `handle_message` reports both
+                // back rather than taking `tx` itself, so it stays a plain
+                // `&mut App` mutator like every other message handler here;
+                // only `dispatch`/`spawn_fetch_vtubers` actually spawn.
+                let (refresh, follow_up) = handle_message(app, message);
+                if refresh {
                     spawn_fetch_vtubers(tx.clone());
+                }
+                if let Some(cmd) = follow_up {
+                    dispatch(cmd, tx.clone());
                 }
             }
             _ = spinner_tick.tick(), if app.pending > 0 => {
@@ -192,10 +204,16 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
             // text wait on an image fetch that might be slower.
             if !photo.is_empty() {
                 tokio::spawn(async move {
-                    let image = fetch_avatar(&photo).await;
+                    let image = fetch_image(&photo).await;
                     let _ = tx.send(Message::Avatar { id, image }).await;
                 });
             }
+        }
+        Command::FetchThumbnail(url) => {
+            tokio::spawn(async move {
+                let image = fetch_image(&url).await;
+                let _ = tx.send(Message::Thumbnail { url, image }).await;
+            });
         }
         Command::OpenProfile(id) => {
             tokio::spawn(async move {
@@ -259,14 +277,16 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
     }
 }
 
-/// Fetch + decode a VTuber avatar. `None` on any failure (bad URL, network
-/// error, undecodable bytes) — collapsed here rather than left as a
-/// `Result`, since `App::accept_avatar` has no error state for a missing
-/// avatar to surface into; it just doesn't render one. `external_client()`,
-/// not the default client: this hits a Twitch/YouTube CDN, not our API, and
-/// must not carry the bearer token — same rule `routes::print_thumbnail`
-/// already follows for the CLI's own avatar rendering.
-async fn fetch_avatar(url: &str) -> Option<image::DynamicImage> {
+/// Fetch + decode an avatar or stream thumbnail — same shape either way, so
+/// one helper covers both `Command::FetchDetail`'s avatar spawn and
+/// `Command::FetchThumbnail`. `None` on any failure (bad URL, network error,
+/// undecodable bytes) — collapsed here rather than left as a `Result`, since
+/// neither `App::accept_avatar` nor `App::accept_thumbnail` has an error
+/// state to surface into; a missing image just doesn't render one.
+/// `external_client()`, not the default client: this hits a Twitch/YouTube
+/// CDN, not our API, and must not carry the bearer token — same rule
+/// `routes::print_thumbnail` already follows for the CLI's own rendering.
+async fn fetch_image(url: &str) -> Option<image::DynamicImage> {
     let bytes = crate::config::external_client().get(url).send().await.ok()?.bytes().await.ok()?;
     image::load_from_memory(&bytes).ok()
 }
@@ -279,15 +299,24 @@ async fn open_and_report(url: String, tx: &mpsc::Sender<Message>) {
     }
 }
 
-/// Returns whether this message means the list is now stale and should be
-/// re-fetched — only true for a *successful* `ActionDone`, since that's the
-/// only case that actually changed backend data.
-fn handle_message(app: &mut App, message: Message) -> bool {
+/// Returns (list-needs-refetching, an optional follow-up `Command` to
+/// `dispatch`). The first is only ever true for a *successful* `ActionDone`,
+/// since that's the only case that actually changed backend data. The
+/// second exists solely for `Detail`: a freshly loaded detail view selects
+/// its first stream (see `App::accept_detail`), which may need its own
+/// thumbnail fetched — `sync_thumbnail_focus` is the same call `event.rs`
+/// makes after every other focus change, just triggered here instead of a
+/// keypress.
+fn handle_message(app: &mut App, message: Message) -> (bool, Option<Command>) {
     match message {
         Message::Vtubers(Ok(rows)) => app.set_items(rows),
         Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
-        Message::Detail { id, result } => app.accept_detail(&id, result),
+        Message::Detail { id, result } => {
+            app.accept_detail(&id, result);
+            return (false, app.sync_thumbnail_focus().map(Command::FetchThumbnail));
+        }
         Message::Avatar { id, image } => app.accept_avatar(&id, image),
+        Message::Thumbnail { url, image } => app.accept_thumbnail(&url, image),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),
         // Not `end_action` — `o` never calls `begin_action` (see event.rs),
@@ -298,10 +327,10 @@ fn handle_message(app: &mut App, message: Message) -> bool {
         Message::ActionDone(result) => {
             let refresh = result.is_ok();
             app.end_action(result);
-            return refresh;
+            return (refresh, None);
         }
     }
-    false
+    (false, None)
 }
 
 /// Enter raw mode + alternate screen. Raw mode hands every keypress

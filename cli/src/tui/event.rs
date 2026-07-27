@@ -13,6 +13,12 @@ pub enum Command {
     /// conceptually starts one action, "load this VTuber's detail view",
     /// which happens to need two independent background fetches.
     FetchDetail { id: String, photo: String },
+    /// A stream's thumbnail — triggered whenever Detail's focus moves onto
+    /// a stream that isn't already in `App::thumbnail_cache`. Unlike
+    /// `FetchDetail`, this fires from three different keys (`j`/`k`/`Tab`)
+    /// as well as once from `accept_detail`'s initial selection, so it's a
+    /// standalone `Command` rather than folded into an existing one.
+    FetchThumbnail(String),
     /// Open a VTuber's channel: the URL isn't known yet, `routes` has to
     /// resolve it first.
     OpenProfile(String),
@@ -93,9 +99,18 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         }
         KeyCode::Char('a') if app.screen == Screen::List => app.open_create_url(),
         KeyCode::Char('e') if app.screen == Screen::List => app.open_edit_form(),
-        KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => app.detail_next(),
-        KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
-        KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
+        KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::Detail => {
+            app.detail_next();
+            return app.sync_thumbnail_focus().map(Command::FetchThumbnail);
+        }
+        KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => {
+            app.detail_previous();
+            return app.sync_thumbnail_focus().map(Command::FetchThumbnail);
+        }
+        KeyCode::Tab if app.screen == Screen::Detail => {
+            app.toggle_detail_focus();
+            return app.sync_thumbnail_focus().map(Command::FetchThumbnail);
+        }
         KeyCode::Enter if app.screen == Screen::List => {
             let row = app.selected()?;
             let (id, photo) = (row.id.clone(), row.photo.clone());
