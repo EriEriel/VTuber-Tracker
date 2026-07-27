@@ -46,10 +46,15 @@ honest reasons you might still want it:
   bell notifications are known to arrive late or not at all sometimes.
   `oshihub watch` polls on an interval you choose, so you trade a small,
   known delay (your poll interval) for consistency — you don't just miss one.
-- **It's lighter than a browser tab, measurably.** A background `oshihub
-  watch` process (checked against the one actually running on this machine)
-  sits at about **15MB of memory** — versus 100MB+ for a single browser tab
-  left open to a stream page, often much more with extensions running.
+- **It's lighter than a browser, measurably.** All the numbers below were
+  read off the machine this was written on, not estimated. A background
+  `oshihub watch` sits at about **15MB of memory**. The browser on the same
+  machine was using **2.1GB** across its 22 processes — and even with every
+  page closed, a browser still holds roughly **780MB** just to exist. So
+  it's somewhere between **60× and 170× lighter**, depending on whether you
+  compare against an empty browser or a real one with tabs open. Individual
+  tabs on that machine ranged from 11MB for a light page to 616MB for a
+  heavy one.
 - **You end up owning your whole environment.** Setting this up means
   standing up a real database, running a backend service, and building a
   Rust binary yourself — good practice for understanding how the tools you
