@@ -4,9 +4,10 @@ Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5's
 thumbnails (VTuber avatar in Detail's header, plus a focus-following stream
 preview pane) have landed; its general polish pass stays open-ended by
 design, new small fixes just get added to it rather than closing the phase.
-Phase 8 (dashboard) is **underway**: the stream-frequency chart (`g`)
-shipped first; the remaining charts are still open. Developed directly on
-`main`, not a separate `tui` branch.
+Phase 8 (dashboard) is **underway**: the stream-frequency chart and the
+follower/subscriber trend (both under `g`) have shipped; the duration
+trend is still open. Developed directly on `main`, not a separate `tui`
+branch.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -143,6 +144,9 @@ POST   /api/sync/all
 GET    /api/vtubers/:id/stats/stream-frequency
                                       → { unit, from, firstStreamAt,
                                           counts[], starts[] }   (Phase 8)
+GET    /api/vtubers/:id/stats/subscriber-trend
+                                      → { from, days, points[],
+                                          current, delta7d, delta30d }  (Phase 8)
 ```
 
 Shape notes worth knowing before modelling anything:
@@ -629,11 +633,35 @@ already collects — no new tracking, just querying what's there.
       parallel `starts[]` of bucket dates — **all calendar math lives on
       the backend**, the CLI deliberately has no date crate. Reviewed by
       running, twice — see the lessons below.
-- [ ] Follower/subscriber trend — `StatSnapshot` is append-only, so the line
-      data exists as soon as two snapshots do. Show the delta ("+500 this
-      week") alongside the raw count; it reads better at a glance
+- [x] Follower/subscriber trend — a `Chart` line (Braille marker, y-axis
+      zoomed to padded min..max with compact `5.9K`-style labels keeping
+      the zoom honest) below the frequency chart, in the same
+      `Screen::Dashboard`; `g` fans out both fetches independently
+      (`Command::FetchDashboard`), each block with its own load state and
+      staleness guard. A line, not a second `BarChart`, because deltas can
+      be negative and `Bar` values are `u64`. Titled/labelled per platform
+      ("Followers" for Twitch, "Subscribers" for YouTube). Backed by
+      `GET /api/vtubers/:id/stats/subscriber-trend`: SPARSE daily points
+      (last snapshot per UTC day; a missing day means "didn't sync", never
+      zero — the opposite densify decision from stream-frequency), integer
+      `day` offsets so gaps stay proportional without CLI date math, and
+      precomputed `current`/`delta7d`/`delta30d` (vs the newest snapshot
+      ≥N days old, `null` when history is too short). **Step 0's data
+      inspection found the real blocker was production, not
+      presentation**: nothing created snapshots on a schedule — only
+      registration, manual sync, and Twitch `stream.online` did — so most
+      channels had exactly one, forever. Fixed with
+      `startStatsSyncPoller()` in backend `scheduler.ts` (the three
+      unforced `syncFrom*` calls on a 6h tick; the 24h staleness gates
+      make quiet cycles free; `STATS_SYNC_DISABLED=true` is the laptop
+      kill switch, set in the local `.env` like `YOUTUBE_POLL_DISABLED`).
+      Deltas stay `null` until snapshots age past 7 days of poller
+      history (~2026-08-03 for the oldest records).
 - [ ] Average stream duration trend — `Stream.duration` is already computed
-- [ ] Model `snapshots[]` in the CLI
+- [x] ~~Model `snapshots[]` in the CLI~~ — superseded: the trend endpoint
+      aggregates server-side, so `StatSnapshot` never crosses the wire and
+      the CLI has nothing to model. (The detail endpoint's raw
+      `snapshots[]` stays unmodelled deliberately.)
 
 **Lessons from the frequency chart, paid for in a full rework.** The first
 cut used `Sparkline` (dense, ~50 weeks visible, `Option<u64>` absent-bar
