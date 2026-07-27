@@ -4,10 +4,10 @@ Status: **Phases 0–7 implemented — TUI v0.1 complete.** Phase 7.5's
 thumbnails (VTuber avatar in Detail's header, plus a focus-following stream
 preview pane) have landed; its general polish pass stays open-ended by
 design, new small fixes just get added to it rather than closing the phase.
-Phase 8 (dashboard) is **underway**: the stream-frequency chart and the
-follower/subscriber trend (both under `g`) have shipped; the duration
-trend is still open. Developed directly on `main`, not a separate `tui`
-branch.
+Phase 8 (dashboard) is **complete** as of v0.5.0: `g` opens a per-VTuber
+dashboard with all three charts — stream frequency, median duration
+(side by side), and the follower/subscriber trend line. Developed
+directly on `main`, not a separate `tui` branch.
 
 `oshihub` has nine one-shot CLI subcommands. This document plans mapping all of
 them onto a single `ratatui` interface, plus the one backend capability no CLI
@@ -56,7 +56,7 @@ So:
 | `create <url>` | `c` | `a` → URL input modal | ✅ 5 |
 | *(none — known gap)* | — | `e` → edit modal | ✅ 6 |
 | `watch` | `w` | Auto-refresh in place | ✅ 7 |
-| *(none — future)* | — | `g` → dashboard / charts | 🚧 8 |
+| *(none — future)* | — | `g` → dashboard / charts | ✅ 8 |
 
 ## Keymap
 
@@ -147,6 +147,10 @@ GET    /api/vtubers/:id/stats/stream-frequency
 GET    /api/vtubers/:id/stats/subscriber-trend
                                       → { from, days, points[],
                                           current, delta7d, delta30d }  (Phase 8)
+GET    /api/vtubers/:id/stats/duration-trend
+                                      → { unit, from, starts[], medians[],
+                                          counts[], overallMedian,
+                                          longest }                     (Phase 8)
 ```
 
 Shape notes worth knowing before modelling anything:
@@ -617,7 +621,7 @@ different VTuber shows neither the old avatar nor the old preview.
 
 ---
 
-# Phase 8 — Dashboard (in progress)
+# Phase 8 — Dashboard (complete, v0.5.0)
 
 From `Todo.md`'s dashboard section. All aggregations over data the schema
 already collects — no new tracking, just querying what's there.
@@ -657,7 +661,21 @@ already collects — no new tracking, just querying what's there.
       kill switch, set in the local `.env` like `YOUTUBE_POLL_DISABLED`).
       Deltas stay `null` until snapshots age past 7 days of poller
       history (~2026-08-03 for the oldest records).
-- [ ] Average stream duration trend — `Stream.duration` is already computed
+- [x] Average stream duration trend — **median**, not mean, per weekly
+      bucket, via `GET /api/vtubers/:id/stats/duration-trend`. Step 0 found
+      YouTube-sourced Stream docs include Shorts/uploads (real 14–46s
+      "streams"), so the endpoint pairs the median with a 10-minute floor
+      (`MIN_STREAM_DURATION_SECS`) — either alone isn't enough when half a
+      bucket can be Shorts. `null` for buckets with no qualifying stream
+      ("didn't stream" ≠ "0 hours"), rendered as an `—` bar. Sits **side by
+      side with the frequency chart** in the dashboard's top band — both
+      are weekly BarCharts over the same `bucketWindow()` buckets (the
+      shared helper extracted for exactly this), so columns align — in
+      magenta (`theme::duration_chart`) after review feedback that
+      same-colour twins read as one wide chart. The current week is dimmed
+      + labelled `now` on both top charts: "dim = not final yet" is one
+      rule across the pair. Bar heights scale in minutes; captions carry
+      the real value (`2h49`).
 - [x] ~~Model `snapshots[]` in the CLI~~ — superseded: the trend endpoint
       aggregates server-side, so `StatSnapshot` never crosses the wire and
       the CLI has nothing to model. (The detail endpoint's raw
