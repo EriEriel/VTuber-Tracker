@@ -327,6 +327,83 @@ vtubersRoute.get('/api/vtubers/:id/profile-url', async (c) => {
 });
 
 /**
+ * GET /api/vtubers/:id/stats/stream-frequency
+ * Bucketed stream counts for the dashboard's frequency chart.
+ * Query: unit=week|day (default week), buckets=<n> (default 52, max 366).
+ * Returns a DENSE zero-filled array, oldest → newest, sized for direct use
+ * as sparkline data — the newest bucket is the current (partial) week/day.
+ */
+vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const vtuber = await VTuber.findById(id);
+    if (!vtuber) {
+      return c.json({ error: 'VTuber not found' }, 404);
+    }
+
+    const unit = c.req.query('unit') === 'day' ? 'day' : 'week';
+    const bucketsRaw = parseInt(c.req.query('buckets') ?? '', 10);
+    const buckets = Number.isFinite(bucketsRaw) ? Math.min(Math.max(bucketsRaw, 1), 366) : 52;
+
+    // Start of the current bucket in UTC (Monday-based for weeks, matching
+    // $dateTrunc's startOfWeek below). UTC has no DST, so stepping backwards
+    // by a fixed ms-per-bucket is safe.
+    const stepMs = (unit === 'week' ? 7 : 1) * 24 * 60 * 60 * 1000;
+    const currentStart = new Date();
+    currentStart.setUTCHours(0, 0, 0, 0);
+    if (unit === 'week') {
+      currentStart.setUTCDate(currentStart.getUTCDate() - ((currentStart.getUTCDay() + 6) % 7));
+    }
+    const from = new Date(currentStart.getTime() - (buckets - 1) * stepMs);
+
+    // Count only streams that actually happened: 'upcoming' would put phantom
+    // counts in future buckets (HoloDex returns scheduled streams), and
+    // 'unknown' is unvetted. The { vtuberId, status } index covers this match.
+    const grouped = await Stream.aggregate([
+      {
+        $match: {
+          vtuberId: vtuber._id,
+          status: { $in: ['live', 'ended'] },
+          startTime: { $gte: from },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateTrunc: { date: '$startTime', unit, startOfWeek: 'monday' } },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // $group only emits buckets that have data; densify so a quiet week shows
+    // as an explicit 0 instead of silently missing from the series.
+    const byTime = new Map<number, number>(
+      grouped.map((g) => [new Date(g._id).getTime(), g.count])
+    );
+    const counts = Array.from(
+      { length: buckets },
+      (_, i) => byTime.get(from.getTime() + i * stepMs) ?? 0
+    );
+
+    // Oldest stream on record. Buckets before this are "not yet tracking",
+    // not "zero streams" — the client renders them as absent rather than 0.
+    const firstStream = await Stream.findOne({
+      vtuberId: vtuber._id,
+      status: { $in: ['live', 'ended'] },
+    }).sort({ startTime: 1 });
+
+    return c.json({
+      unit,
+      from: from.toISOString(),
+      firstStreamAt: firstStream ? firstStream.startTime.toISOString() : null,
+      counts,
+    });
+  } catch (error) {
+    return c.json({ error: 'Failed to compute stream frequency', detail: String(error) }, 500);
+  }
+});
+
+/**
  * PUT /api/vtubers/:id
  * Update VTuber details (e.g. name, isTracked status)
  */
