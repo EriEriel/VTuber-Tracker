@@ -1,0 +1,15 @@
+# Keep GitHub's language bar describing the project, not its documentation.
+#
+# OVER_VIEW.html is 434KB, of which ~93% is the nine Mermaid diagrams
+# pre-rendered to SVG and inlined so the page opens offline. Linguist ranks by
+# bytes and counts inlined SVG as HTML, so that one file was reading as 55% of
+# the repo — more than Rust and TypeScript combined.
+#
+# `linguist-documentation` (rather than `linguist-generated`) is deliberate:
+# it drops the file from the language stats but keeps its diffs visible, and
+# the ~30KB of page around the diagrams is hand-written and does get edited.
+OVER_VIEW.html linguist-documentation
+
+# The diagram sources are the thing to actually read; they're small, but they
+# aren't project code either.
+docs/diagrams/*.mmd linguist-documentation
