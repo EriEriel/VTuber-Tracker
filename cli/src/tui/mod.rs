@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::config;
-use crate::routes::{ApiError, LiveEntry, VtuberDetail};
+use crate::routes::{ApiError, LiveEntry, StreamFrequency, VtuberDetail};
 
 /// What can arrive asynchronously and needs to update `App`. Phase 5 adds
 /// `ActionDone` for the three mutating actions, distinct from `ActionFailed`
@@ -46,6 +46,12 @@ enum Message {
     Thumbnail {
         url: String,
         image: Option<image::DynamicImage>,
+    },
+    /// The dashboard's stream-frequency data — keyed by VTuber id, matching
+    /// `App::pending_frequency_id`'s stale-response guard.
+    Frequency {
+        id: String,
+        result: Result<StreamFrequency, ApiError>,
     },
     ActionFailed(String),
     ActionDone(Result<String, String>),
@@ -215,6 +221,12 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
                 let _ = tx.send(Message::Thumbnail { url, image }).await;
             });
         }
+        Command::FetchFrequency(id) => {
+            tokio::spawn(async move {
+                let result = crate::routes::fetch_stream_frequency(&id).await;
+                let _ = tx.send(Message::Frequency { id, result }).await;
+            });
+        }
         Command::OpenProfile(id) => {
             tokio::spawn(async move {
                 match crate::routes::fetch_profile_url(&id).await {
@@ -316,6 +328,7 @@ fn handle_message(app: &mut App, message: Message) -> (bool, Option<Command>) {
             return (false, app.sync_thumbnail_focus().map(Command::FetchThumbnail));
         }
         Message::Avatar { id, image } => app.accept_avatar(&id, image),
+        Message::Frequency { id, result } => app.accept_frequency(&id, result),
         Message::Thumbnail { url, image } => app.accept_thumbnail(&url, image),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),

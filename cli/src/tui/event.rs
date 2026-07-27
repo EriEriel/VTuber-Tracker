@@ -19,6 +19,9 @@ pub enum Command {
     /// as well as once from `accept_detail`'s initial selection, so it's a
     /// standalone `Command` rather than folded into an existing one.
     FetchThumbnail(String),
+    /// `g`'s dashboard data — bucketed stream counts for the selected
+    /// VTuber, by id.
+    FetchFrequency(String),
     /// Open a VTuber's channel: the URL isn't known yet, `routes` has to
     /// resolve it first.
     OpenProfile(String),
@@ -76,13 +79,20 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
             // matched exhaustively, and this is the sane fallback if that
             // invariant ever changes.
             Screen::Help | Screen::Detail | Screen::Modal(_) => app.go_back_to_list(),
+            // Not `go_back_to_list` — the dashboard can be opened from
+            // Detail, and backing out should land where `g` was pressed.
+            Screen::Dashboard => app.close_dashboard(),
             Screen::List => app.should_quit = true,
         },
+        KeyCode::Char('h') if app.screen == Screen::Dashboard => app.close_dashboard(),
         KeyCode::Char('h') if app.screen != Screen::List => app.go_back_to_list(),
-        // Stacking the help overlay over the detail screen isn't something
-        // any phase has asked for yet — Esc/h from Help always lands back on
-        // List, so opening it over Detail would lose the detail context.
-        KeyCode::Char('?') if app.screen != Screen::Detail => app.toggle_help(),
+        // Stacking the help overlay over the detail or dashboard screens
+        // isn't something any phase has asked for yet — Esc/h from Help
+        // always lands back on List, so opening it over either would lose
+        // that context.
+        KeyCode::Char('?') if matches!(app.screen, Screen::List | Screen::Help) => {
+            app.toggle_help()
+        }
         KeyCode::Down | KeyCode::Char('j') if app.screen == Screen::List => app.next(),
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::List => app.previous(),
         KeyCode::Char('L') if app.screen == Screen::List => app.toggle_live_only(),
@@ -116,6 +126,15 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
             let (id, photo) = (row.id.clone(), row.photo.clone());
             app.begin_detail(id.clone());
             return Some(Command::FetchDetail { id, photo });
+        }
+        // From List *or* Detail — both act on the same list selection
+        // (Detail is always the selected row's), and `begin_dashboard`
+        // remembers which one to return to.
+        KeyCode::Char('g') if matches!(app.screen, Screen::List | Screen::Detail) => {
+            let row = app.selected()?;
+            let (id, name) = (row.id.clone(), row.name.clone());
+            app.begin_dashboard(id.clone(), name);
+            return Some(Command::FetchFrequency(id));
         }
         // Contextual: on List, `o` opens the VTuber's channel (nothing else
         // to open there). On Detail, it opens whichever stream/clip is

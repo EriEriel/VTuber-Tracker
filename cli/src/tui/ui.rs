@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Bar, BarChart, Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use ratatui_image::Image;
@@ -52,6 +52,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.screen == Screen::Detail {
         draw_detail(frame, content_area, app);
+    } else if app.screen == Screen::Dashboard {
+        draw_dashboard(frame, content_area, app);
     } else {
         match &app.load_state {
             LoadState::Loading => draw_message(frame, content_area, "Loading tracked VTubers..."),
@@ -181,12 +183,13 @@ fn draw_hints_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.screen {
             Screen::List if app.live_only => {
-                "j/k move · Enter detail · o open · s sync · d delete · a add · e edit · / filter · L show all · ? help · q quit"
+                "j/k move · Enter detail · g dashboard · o open · s sync · d delete · a add · e edit · / filter · L show all · ? help · q quit"
             }
             Screen::List => {
-                "j/k move · Enter detail · o open · s sync · d delete · a add · e edit · / filter · L live only · ? help · q quit"
+                "j/k move · Enter detail · g dashboard · o open · s sync · d delete · a add · e edit · / filter · L live only · ? help · q quit"
             }
-            Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  Esc/h back",
+            Screen::Detail => "j/k move  ·  Tab pane  ·  o open  ·  g dashboard  ·  Esc/h back",
+            Screen::Dashboard => "Esc/h back  ·  q quit",
             Screen::Help => "Esc/h close",
             Screen::Modal(ModalKind::ConfirmDelete) => "y / Enter confirm  ·  n / Esc cancel",
             Screen::Modal(ModalKind::CreateUrl) => "Enter create  ·  Esc cancel",
@@ -317,6 +320,107 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
     draw_stream_list(frame, chunks[1], detail, app);
     draw_clip_list(frame, chunks[2], detail, app);
     draw_thumbnail_preview(frame, chunks[3], app);
+}
+
+/// The bar area height in rows, excluding the label row and the block's
+/// borders. Six rows = 48 ticks of resolution, plenty for weekly counts
+/// that top out well under 20 — taller would just be empty air.
+const CHART_ROWS: u16 = 6;
+/// Wide enough for the "MM-DD" label under each bar (5 cells), which also
+/// comfortably fits a 2-digit count printed on the bar itself.
+const BAR_WIDTH: u16 = 5;
+const BAR_GAP: u16 = 1;
+
+/// Phase 8's per-VTuber dashboard: one chart (stream frequency) plus a
+/// summary line, sized to grow downward as later charts land.
+///
+/// A labelled `BarChart`, not a `Sparkline` — the first cut used one and
+/// failed the glanceability test on all three counts a sparkline trades
+/// away: no dates on the x-axis, no numbers on the bars, and its "absent"
+/// mechanism made *no data* the tallest thing on screen. Fewer weeks
+/// visible (each labelled bar costs `BAR_WIDTH + BAR_GAP` columns), but
+/// every bar now answers "which week, how many" by itself.
+fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .title(format!(" Dashboard — {} ", app.dashboard_name))
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let freq = match &app.frequency_load {
+        LoadState::Loading => {
+            frame.render_widget(Paragraph::new("Loading stream history..."), inner);
+            return;
+        }
+        LoadState::Failed(msg) => {
+            frame.render_widget(Paragraph::new(format!("Error: {msg}")), inner);
+            return;
+        }
+        LoadState::Loaded => app.frequency.as_ref(),
+    };
+    let Some(freq) = freq else { return };
+
+    if freq.weeks.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No streams recorded yet — try s to sync.").style(theme::muted()),
+            inner,
+        );
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        // bars + the label row + the chart block's two border rows
+        Constraint::Length(CHART_ROWS + 3),
+        Constraint::Length(1), // summary
+        Constraint::Min(0),    // future charts land here
+    ])
+    .split(inner);
+
+    // `BarChart` fits bars left-to-right and silently drops the overflow,
+    // which would cut off the *newest* weeks — so slice the tail ourselves,
+    // using the widget's own fitting arithmetic (see `group_ticks` in
+    // ratatui-widgets), and let the oldest weeks be what falls away.
+    let chart_width = chunks[0].width.saturating_sub(2); // block borders
+    let max_bars = ((chart_width + BAR_GAP) / (BAR_WIDTH + BAR_GAP)) as usize;
+    let visible = &freq.weeks[freq.weeks.len().saturating_sub(max_bars.max(1))..];
+
+    let bars: Vec<Bar> = visible
+        .iter()
+        .map(|w| {
+            // The current week is deliberately set apart: dimmed, labelled
+            // "now" instead of its date — its count is still accumulating,
+            // and at full brightness the short bar at the eye's landing
+            // spot always read as "streaming stopped".
+            let (style, label) = if w.partial {
+                (theme::muted(), Line::styled("now", theme::muted()))
+            } else {
+                (theme::chart(), Line::raw(w.label.clone()))
+            };
+            Bar::with_label(label, w.count)
+                .style(style)
+                // Reversed so the count reads as text on the bar rather
+                // than vanishing into it.
+                .value_style(style.add_modifier(Modifier::REVERSED))
+        })
+        .collect();
+
+    let chart = BarChart::new(bars)
+        .block(Block::default().title(" Streams / week ").borders(Borders::ALL))
+        .bar_width(BAR_WIDTH)
+        .bar_gap(BAR_GAP);
+    frame.render_widget(chart, chunks[0]);
+
+    // The exact numbers the bars can't carry: the partial week called out
+    // by name, the average that excludes it, and how far back the data goes.
+    let mut parts = vec![format!("this week {}", freq.this_week)];
+    if let Some(avg) = freq.avg_per_week {
+        parts.push(format!("avg {avg:.1}/wk"));
+    }
+    parts.push(format!("peak {}", freq.peak));
+    if let Some(since) = &freq.since {
+        parts.push(format!("{} streams since {since}", freq.total));
+    }
+    frame.render_widget(Paragraph::new(parts.join("  ·  ")), chunks[1]);
 }
 
 /// Whichever stream currently has focus, full-size, in its own pane below
@@ -473,8 +577,8 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::styled("L         live only      /      filter by name", theme::muted()),
         Line::styled("s         sync selected  d      delete selected (confirms)", theme::muted()),
         Line::styled("a         add from URL   e      edit selected", theme::muted()),
-        Line::styled("q         quit           ?      toggle this help", theme::muted()),
-        Line::styled("Esc/h     close/back", theme::muted()),
+        Line::styled("g         dashboard      q      quit", theme::muted()),
+        Line::styled("?         toggle help    Esc/h  close/back", theme::muted()),
     ];
 
     let block = Block::default().title(" Help ").borders(Borders::ALL);

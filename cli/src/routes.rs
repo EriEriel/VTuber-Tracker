@@ -380,6 +380,49 @@ pub async fn fetch_live_vtubers() -> Result<Vec<LiveEntry>, ApiError> {
     Ok(live)
 }
 
+/// `GET /api/vtubers/:id/stats/stream-frequency` — bucketed stream counts
+/// for the TUI dashboard. The backend does all the calendar work (UTC weeks,
+/// zero-filling quiet buckets, nulling buckets that predate tracking), so
+/// this stays a dumb pipe: nothing in the CLI parses a date, matching
+/// `LiveStreamInfo::start_time`'s existing stance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamFrequency {
+    /// One entry per bucket, oldest → newest; the newest bucket is the
+    /// current (partial) week. `None` = the bucket ended before the first
+    /// stream on record ("not yet tracking") — dropped at the mapping
+    /// boundary rather than charted, so "no data" never competes visually
+    /// with data; `Some(0)` = tracked and genuinely quiet. See
+    /// `app::FrequencyView`.
+    pub counts: Vec<Option<u64>>,
+    /// Bucket-start dates ("YYYY-MM-DD", UTC), parallel to `counts` — the
+    /// bar labels. `default` so a CLI updated ahead of a backend redeploy
+    /// degrades to unlabelled bars instead of failing to deserialize, same
+    /// stance as `LiveStreamInfo::external_id`.
+    #[serde(default)]
+    pub starts: Vec<String>,
+    /// ISO timestamp of the oldest stream on record, `None` when the VTuber
+    /// has no streams at all. Only ever displayed date-truncated, never
+    /// parsed.
+    #[serde(default)]
+    pub first_stream_at: Option<String>,
+}
+
+/// Requests the backend's defaults (52 weekly buckets) — more than any
+/// terminal renders at once, and the sparkline self-truncates to whatever
+/// fits, so there's nothing useful for a parameter to say yet.
+pub async fn fetch_stream_frequency(id: &str) -> Result<StreamFrequency, ApiError> {
+    let client = crate::config::client();
+    let res = client
+        .get(format!("{}/api/vtubers/{id}/stats/stream-frequency", api_url()))
+        .send()
+        .await?;
+
+    let body = read_body(res).await?;
+    let frequency: StreamFrequency = serde_json::from_str(&body)?;
+    Ok(frequency)
+}
+
 pub(crate) async fn fetch_profile_url(id: &str) -> Result<String, ApiError> {
     let client = crate::config::client();
     let res = client

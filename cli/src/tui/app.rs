@@ -101,15 +101,101 @@ pub enum DetailFocus {
 
 /// Which screen is on top. `Help`/`Modal` overlay whatever `load_state` is
 /// currently rendering underneath, rather than replacing it — closing them
-/// returns to exactly what was there before. All three of `Detail`/`Help`/
-/// `Modal` are only ever reached from `List` and return straight to it — no
-/// stack, since nothing yet needs one.
+/// returns to exactly what was there before. `Detail`/`Help`/`Modal` are
+/// only ever reached from `List` and return straight to it. `Dashboard` is
+/// the one exception: reachable from both `List` and `Detail`, so it
+/// remembers its entry point in `App::dashboard_return` — still a single
+/// slot, not a stack, since one level of "where did I come from" is all
+/// anything needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     List,
     Detail,
+    Dashboard,
     Help,
     Modal(ModalKind),
+}
+
+/// One tracked week, ready for a labelled `BarChart` bar.
+pub struct WeekBar {
+    /// The bucket's start date as "MM-DD" ("07-06"), sliced from the
+    /// backend's "YYYY-MM-DD". Empty when the backend predates `starts`
+    /// (see `routes::StreamFrequency`) — an unlabelled bar, not a crash.
+    pub label: String,
+    pub count: u64,
+    /// The current, still-accumulating week — always the newest bar.
+    /// Rendered dimmed and labelled "now" so its low count reads as "week
+    /// just started", not "streaming stopped".
+    pub partial: bool,
+}
+
+/// `g`'s per-VTuber stats view, mapped from `routes::StreamFrequency` at the
+/// boundary (same rule as `VtuberRow`: the wire DTO must not leak into the
+/// render layer). All the summary numbers are computed once here, on accept,
+/// so `ui::draw` just prints fields.
+pub struct FrequencyView {
+    /// Tracked buckets only, oldest → newest. Pre-tracking (`None`) buckets
+    /// are dropped here rather than charted as an "absent" region — a wall
+    /// of no-data columns was the most visually dominant thing on the first
+    /// cut of this chart, which is exactly backwards. The summary's `since`
+    /// date carries that information instead. `ui.rs` renders the *tail* of
+    /// this (newest weeks win) when the pane can't fit all of it.
+    pub weeks: Vec<WeekBar>,
+    /// Sum over all tracked buckets, including the current partial week.
+    pub total: u64,
+    /// The newest bucket — always the current, still-accumulating week, so
+    /// it's labelled "this week" rather than folded into the average below.
+    pub this_week: u64,
+    /// Mean over *complete* tracked weeks (the current partial one excluded —
+    /// it would drag the average down every Monday). `None` until at least
+    /// one complete tracked week exists.
+    pub avg_per_week: Option<f64>,
+    pub peak: u64,
+    /// `firstStreamAt` truncated to its date half, for "since 2026-07-10".
+    pub since: Option<String>,
+}
+
+impl From<crate::routes::StreamFrequency> for FrequencyView {
+    fn from(freq: crate::routes::StreamFrequency) -> Self {
+        // Tracked buckets only, oldest → newest; `starts` is parallel to
+        // `counts`, so the index survives the `None`-filtering to look up
+        // each kept bucket's date.
+        let weeks: Vec<WeekBar> = freq
+            .counts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.map(|count| (i, count)))
+            .map(|(i, count)| WeekBar {
+                // "YYYY-MM-DD" → "MM-DD". `chars().skip` rather than a byte
+                // slice so a malformed short string degrades to empty
+                // instead of panicking on an out-of-range index.
+                label: freq
+                    .starts
+                    .get(i)
+                    .map(|s| s.chars().skip(5).take(5).collect())
+                    .unwrap_or_default(),
+                count,
+                // The newest *bucket* is always the current week; if it was
+                // tracked it's the last thing `filter_map` kept.
+                partial: i == freq.counts.len() - 1,
+            })
+            .collect();
+
+        let total = weeks.iter().map(|w| w.count).sum();
+        let this_week = weeks.last().map(|w| w.count).unwrap_or(0);
+        let complete = weeks.len().saturating_sub(1);
+        let avg_per_week = (complete > 0)
+            .then(|| (total - this_week) as f64 / complete as f64);
+
+        Self {
+            total,
+            this_week,
+            avg_per_week,
+            peak: weeks.iter().map(|w| w.count).max().unwrap_or(0),
+            weeks,
+            since: freq.first_stream_at.map(|s| s.chars().take(10).collect()),
+        }
+    }
 }
 
 /// `d` and `a` both need exclusive keyboard focus the same way `/` does —
@@ -303,6 +389,26 @@ pub struct App {
     /// list/detail load failure, an action outcome has no screen of its own
     /// to show it on, so it has to surface here.
     pub status: Option<Result<String, String>>,
+    /// `g`'s dashboard data for the VTuber it was opened on. `None` until
+    /// the fetch resolves; `frequency_load` tracks that fetch the same way
+    /// `detail_load` tracks Detail's.
+    pub frequency: Option<FrequencyView>,
+    pub frequency_load: LoadState,
+    /// Same stale-response guard as `pending_detail_id`, for the frequency
+    /// fetch: close the dashboard and open a different VTuber's before the
+    /// first fetch resolves, and the late response no longer matches.
+    pending_frequency_id: Option<String>,
+    /// Name snapshot for the dashboard's title. Snapshotted at open rather
+    /// than re-derived from `selected()` (the confirm-delete modal's
+    /// approach) because the live ticker's `ensure_selection_valid` *can*
+    /// move the selection under an open dashboard — modal input being
+    /// exclusive is what makes re-deriving safe there, and that argument
+    /// doesn't hold here.
+    pub dashboard_name: String,
+    /// Where `Esc`/`h` lands from the dashboard — `List` or `Detail`,
+    /// whichever it was opened from. Detail's state is untouched while the
+    /// dashboard is up, so returning is just a screen switch.
+    dashboard_return: Screen,
     /// How many `o`/`s`/`d`/`a` actions are currently in flight. A counter
     /// rather than a bool: dispatching a second action before the first
     /// resolves must not let that first completion turn the spinner off
@@ -356,6 +462,11 @@ impl App {
             create_input: String::new(),
             create_error: None,
             edit: None,
+            frequency: None,
+            frequency_load: LoadState::Loading,
+            pending_frequency_id: None,
+            dashboard_name: String::new(),
+            dashboard_return: Screen::List,
             status: None,
             pending: 0,
             spinner_frame: 0,
@@ -511,6 +622,44 @@ impl App {
         self.stream_state = ListState::default();
         self.clip_state = ListState::default();
         self.status = None;
+    }
+
+    /// Opens the dashboard for the selected VTuber, remembering the screen
+    /// it was opened from so `close_dashboard` can return there.
+    pub fn begin_dashboard(&mut self, id: String, name: String) {
+        self.dashboard_return = self.screen;
+        self.screen = Screen::Dashboard;
+        self.frequency = None;
+        self.frequency_load = LoadState::Loading;
+        self.pending_frequency_id = Some(id);
+        self.dashboard_name = name;
+        self.status = None;
+    }
+
+    pub fn close_dashboard(&mut self) {
+        self.screen = self.dashboard_return;
+        self.status = None;
+    }
+
+    /// Applies a frequency fetch's result, unless the user has since closed
+    /// this dashboard and opened a different VTuber's (see
+    /// `pending_frequency_id` — same guard as `accept_detail`'s).
+    pub fn accept_frequency(
+        &mut self,
+        id: &str,
+        result: Result<crate::routes::StreamFrequency, crate::routes::ApiError>,
+    ) {
+        if self.pending_frequency_id.as_deref() != Some(id) {
+            return;
+        }
+        self.pending_frequency_id = None;
+        match result {
+            Ok(freq) => {
+                self.frequency = Some(freq.into());
+                self.frequency_load = LoadState::Loaded;
+            }
+            Err(e) => self.frequency_load = LoadState::Failed(e.to_string()),
+        }
     }
 
     pub fn open_confirm_delete(&mut self) {

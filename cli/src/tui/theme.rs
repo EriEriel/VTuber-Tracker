@@ -59,6 +59,18 @@ pub fn live_status(is_live: bool) -> Style {
     }
 }
 
+/// The dashboard's chart data (bar-chart bars; the current partial week
+/// uses `muted()` instead). Cyan rather than the live green: the chart
+/// shows *history*, and green is reserved for "live right now" everywhere
+/// else in both theme files. Plain `Cyan`, not `name()`'s `LightCyan` bold
+/// — related concept, but a solid block of bright bold columns would
+/// out-shout the actual name above it. No `theme.rs` twin yet,
+/// deliberately: the plain CLI renders no charts, and the convention only
+/// asks that a concept *shared* by both files keeps one colour.
+pub fn chart() -> Style {
+    Style::default().fg(Color::Cyan)
+}
+
 /// The list's `LIVE` badge for a VTuber Phase 7's ticker just flagged as
 /// `WentLive`/`BurstWentLive` this poll, not merely still-live from before.
 /// Same green as `live_status`, plus `REVERSED` to stand out from every
