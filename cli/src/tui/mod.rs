@@ -34,6 +34,13 @@ enum Message {
         result: Result<VtuberDetail, ApiError>,
     },
     Live(Result<Vec<LiveEntry>, ApiError>),
+    /// `image` is already collapsed from a `Result` — a missing avatar has
+    /// no error state of its own to show (see `App::accept_avatar`), so
+    /// there's nothing for a `Result` to carry that `None` doesn't already.
+    Avatar {
+        id: String,
+        image: Option<image::DynamicImage>,
+    },
     ActionFailed(String),
     ActionDone(Result<String, String>),
 }
@@ -172,11 +179,23 @@ async fn run_loop(
 /// deliberately doesn't import `routes` at all.
 fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
     match cmd {
-        Command::FetchDetail(id) => {
+        Command::FetchDetail { id, photo } => {
+            let detail_tx = tx.clone();
+            let detail_id = id.clone();
             tokio::spawn(async move {
-                let result = crate::routes::fetch_vtuber_detail(&id).await;
-                let _ = tx.send(Message::Detail { id, result }).await;
+                let result = crate::routes::fetch_vtuber_detail(&detail_id).await;
+                let _ = detail_tx.send(Message::Detail { id: detail_id, result }).await;
             });
+            // A separate task, not chained after the detail fetch above —
+            // the avatar comes from a CDN, not our API, so there's no
+            // dependency between the two, and no reason to make Detail's
+            // text wait on an image fetch that might be slower.
+            if !photo.is_empty() {
+                tokio::spawn(async move {
+                    let image = fetch_avatar(&photo).await;
+                    let _ = tx.send(Message::Avatar { id, image }).await;
+                });
+            }
         }
         Command::OpenProfile(id) => {
             tokio::spawn(async move {
@@ -240,6 +259,18 @@ fn dispatch(cmd: Command, tx: mpsc::Sender<Message>) {
     }
 }
 
+/// Fetch + decode a VTuber avatar. `None` on any failure (bad URL, network
+/// error, undecodable bytes) — collapsed here rather than left as a
+/// `Result`, since `App::accept_avatar` has no error state for a missing
+/// avatar to surface into; it just doesn't render one. `external_client()`,
+/// not the default client: this hits a Twitch/YouTube CDN, not our API, and
+/// must not carry the bearer token — same rule `routes::print_thumbnail`
+/// already follows for the CLI's own avatar rendering.
+async fn fetch_avatar(url: &str) -> Option<image::DynamicImage> {
+    let bytes = crate::config::external_client().get(url).send().await.ok()?.bytes().await.ok()?;
+    image::load_from_memory(&bytes).ok()
+}
+
 async fn open_and_report(url: String, tx: &mpsc::Sender<Message>) {
     if let Err(err) = open::that(url) {
         let _ = tx
@@ -256,6 +287,7 @@ fn handle_message(app: &mut App, message: Message) -> bool {
         Message::Vtubers(Ok(rows)) => app.set_items(rows),
         Message::Vtubers(Err(e)) => app.set_error(e.to_string()),
         Message::Detail { id, result } => app.accept_detail(&id, result),
+        Message::Avatar { id, image } => app.accept_avatar(&id, image),
         Message::Live(Ok(entries)) => app.set_live(entries),
         Message::Live(Err(e)) => app.status = Some(Err(e.to_string())),
         // Not `end_action` — `o` never calls `begin_action` (see event.rs),

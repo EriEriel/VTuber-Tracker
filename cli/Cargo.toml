@@ -17,5 +17,11 @@ toml = "1.1.3"
 dirs = "6.0.0"
 colored = "3.1.1"
 ratatui = { version = "0.30.2", features = ["crossterm"] }
+# `default-features = false`: the crate's default pulls in `chafa-dyn`, an
+# optional C-library ASCII-art backend needing `libchafa`/pkg-config on the
+# system — kitty/iTerm2/Sixel/halfblocks (the protocols actually in use here)
+# are native Rust, not gated behind it. `crossterm` matches the backend
+# feature already enabled on `ratatui` itself above.
+ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
 anyhow = "1.0.104"
 futures-util = "0.3"

@@ -8,7 +8,11 @@ use crate::models::Source;
 /// needed to actually `tokio::spawn` it, so it stays the thing that performs
 /// it. Keeps this function a plain synchronous mutator, same as Phase 1.
 pub enum Command {
-    FetchDetail(String),
+    /// `photo` rides along so `dispatch` can also kick off the avatar fetch
+    /// without needing `&App` (it only ever gets `cmd` and `tx`) — `Enter`
+    /// conceptually starts one action, "load this VTuber's detail view",
+    /// which happens to need two independent background fetches.
+    FetchDetail { id: String, photo: String },
     /// Open a VTuber's channel: the URL isn't known yet, `routes` has to
     /// resolve it first.
     OpenProfile(String),
@@ -93,9 +97,10 @@ pub fn handle_event(app: &mut App, event: Event) -> Option<Command> {
         KeyCode::Up | KeyCode::Char('k') if app.screen == Screen::Detail => app.detail_previous(),
         KeyCode::Tab if app.screen == Screen::Detail => app.toggle_detail_focus(),
         KeyCode::Enter if app.screen == Screen::List => {
-            let id = app.selected().map(|row| row.id.clone())?;
+            let row = app.selected()?;
+            let (id, photo) = (row.id.clone(), row.photo.clone());
             app.begin_detail(id.clone());
-            return Some(Command::FetchDetail(id));
+            return Some(Command::FetchDetail { id, photo });
         }
         // Contextual: on List, `o` opens the VTuber's channel (nothing else
         // to open there). On Detail, it opens whichever stream/clip is

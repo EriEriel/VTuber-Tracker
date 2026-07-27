@@ -1,11 +1,24 @@
 use std::collections::{HashMap, HashSet};
 
+use ratatui::layout::Size;
 use ratatui::widgets::ListState;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::Protocol;
+use ratatui_image::Resize;
 
 use crate::config::{self, ConfigSource};
 use crate::models::{Platform, Source, VtuberChannel};
 use crate::routes::{LiveEntry, VtuberDetail};
 use crate::watch::{self, WatchState};
+
+/// The avatar's fixed render box, in terminal cells. `ui::draw_detail` must
+/// split its header layout to exactly this size — `Picker::new_protocol`
+/// bakes this size into the `Protocol` at creation time (see `accept_avatar`),
+/// so rendering `Image::new(protocol)` into a differently-sized `Rect` later
+/// would fit a stale box, not the one actually drawn into. One shared
+/// constant instead of two files agreeing on `16`/`8` independently.
+pub const AVATAR_COLS: u16 = 16;
+pub const AVATAR_ROWS: u16 = 8;
 
 /// Minimal shape for what the list *and* detail screens need.
 /// Map existing API DTO into this at the boundary (same mapper-at-the-
@@ -187,6 +200,14 @@ pub struct App {
     pub config_url: String,
     pub config_source: String,
     pub config_token: String,
+    /// Terminal graphics-protocol capability, probed once at startup via
+    /// `Picker::from_query_stdio` — same "resolved once into an `App` field"
+    /// pattern as `config_url` above, and for the same reason: probing is a
+    /// side-effecting terminal query, not something `ui::draw` should do.
+    /// `None` if the probe fails (piped stdio, a terminal that never answers
+    /// the query) — avatars just don't render rather than the TUI refusing
+    /// to start over what's ultimately a cosmetic feature.
+    pub picker: Option<Picker>,
     /// Streams/clips for whichever `VtuberRow` is currently selected. `None`
     /// until the background fetch resolves; `detail_load` tracks that fetch
     /// the same way `load_state` tracks the list's.
@@ -197,6 +218,23 @@ pub struct App {
     /// response's id won't match this any more and gets discarded instead of
     /// overwriting the detail screen for the wrong VTuber.
     pending_detail_id: Option<String>,
+    /// The currently selected VTuber's avatar, already baked into a
+    /// fixed-`AVATAR_COLS`x`AVATAR_ROWS` `Protocol` by `Picker::new_protocol`
+    /// so `ui::draw_detail` can render it every frame with zero re-encoding
+    /// work — matches how `ratatui-image` expects a static (non-resizing)
+    /// slot to be used. `None` before it loads, on fetch/decode failure, or
+    /// once `Picker::from_query_stdio` itself failed at startup (no
+    /// supported protocol at all) — the avatar slot is cosmetic, so all
+    /// three cases just mean "don't render one," never an error shown to
+    /// the user.
+    pub avatar: Option<Protocol>,
+    /// Separate from `pending_detail_id` on purpose: the detail and avatar
+    /// fetches are two independent tasks dispatched together by the same
+    /// `Enter` press, but not guaranteed to resolve in the same order.
+    /// `accept_detail` clearing `pending_detail_id` on arrival would silently
+    /// drop every avatar that happens to resolve afterward, not just
+    /// genuinely stale ones.
+    pending_avatar_id: Option<String>,
     pub detail_focus: DetailFocus,
     pub stream_state: ListState,
     pub clip_state: ListState,
@@ -272,9 +310,16 @@ impl App {
                 // main.rs, this is only ever enough to debug a 401.
                 None => "not set".to_string(),
             },
+            // Must run after `setup_terminal` has already entered raw mode
+            // (it writes an escape query and reads stdio for the reply) —
+            // true by construction, since `mod.rs::run` only calls
+            // `App::new` after `setup_terminal()?` returns.
+            picker: Picker::from_query_stdio().ok(),
             detail: None,
             detail_load: LoadState::Loading,
             pending_detail_id: None,
+            avatar: None,
+            pending_avatar_id: None,
             detail_focus: DetailFocus::Streams,
             stream_state: ListState::default(),
             clip_state: ListState::default(),
@@ -432,6 +477,8 @@ impl App {
         self.screen = Screen::Detail;
         self.detail = None;
         self.detail_load = LoadState::Loading;
+        self.avatar = None;
+        self.pending_avatar_id = Some(id.clone());
         self.pending_detail_id = Some(id);
         self.detail_focus = DetailFocus::Streams;
         self.stream_state = ListState::default();
@@ -600,6 +647,22 @@ impl App {
             }
             Err(e) => self.detail_load = LoadState::Failed(e.to_string()),
         }
+    }
+
+    /// Applies a decoded avatar, unless it's for a VTuber the user has since
+    /// navigated away from (see `pending_avatar_id`). `image` is already
+    /// `None` on fetch/decode failure — `mod.rs`'s fetch task collapses any
+    /// `reqwest`/`image` error into `None` before sending, since a missing
+    /// avatar has no error state of its own to show, it just doesn't render.
+    pub fn accept_avatar(&mut self, id: &str, image: Option<image::DynamicImage>) {
+        if self.pending_avatar_id.as_deref() != Some(id) {
+            return;
+        }
+        self.pending_avatar_id = None;
+        self.avatar = image.and_then(|img| {
+            let size = Size { width: AVATAR_COLS, height: AVATAR_ROWS };
+            self.picker.as_ref()?.new_protocol(img, size, Resize::Fit(None)).ok()
+        });
     }
 
     pub fn toggle_detail_focus(&mut self) {

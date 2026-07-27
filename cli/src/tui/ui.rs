@@ -5,8 +5,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use ratatui_image::Image;
 
-use super::app::{App, DetailFocus, EditField, LoadState, ModalKind, Screen};
+use super::app::{App, DetailFocus, EditField, LoadState, ModalKind, Screen, AVATAR_COLS, AVATAR_ROWS};
 use super::theme;
 use crate::routes::VtuberDetail;
 
@@ -283,8 +284,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let Some(detail) = detail else {
-        let block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
-        frame.render_widget(Paragraph::new(header_lines).block(block), area);
+        draw_detail_header(frame, area, header_lines, app);
         return;
     };
 
@@ -297,18 +297,46 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         ),
     ]));
 
+    // +2 for the block's borders; `.max` so a loaded avatar (fixed
+    // `AVATAR_ROWS` tall) always has room even when there are fewer text
+    // lines than that — otherwise the image would render past the header
+    // block's own bottom border into the stream list below it.
+    let header_height = (header_lines.len() as u16 + 2).max(AVATAR_ROWS + 2);
     let chunks = Layout::vertical([
-        Constraint::Length(header_lines.len() as u16 + 2), // +2 for the block's borders
+        Constraint::Length(header_height),
         Constraint::Percentage(50),
         Constraint::Percentage(50),
     ])
     .split(area);
 
-    let header_block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
-    frame.render_widget(Paragraph::new(header_lines).block(header_block), chunks[0]);
-
+    draw_detail_header(frame, chunks[0], header_lines, app);
     draw_stream_list(frame, chunks[1], detail, app);
     draw_clip_list(frame, chunks[2], detail, app);
+}
+
+/// Renders the " VTuber Detail " block, splitting its inner area between a
+/// fixed `AVATAR_COLS`-wide avatar slot and the header text when `app.avatar`
+/// has already resolved. Shared between the pre-load and loaded paths above
+/// so the avatar (an independent fetch — see `Command::FetchDetail`) can
+/// appear as soon as it's ready, even while streams/clips are still loading.
+fn draw_detail_header(frame: &mut Frame, area: Rect, header_lines: Vec<Line>, app: &App) {
+    let block = Block::default().title(" VTuber Detail ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(avatar) = &app.avatar else {
+        frame.render_widget(Paragraph::new(header_lines), inner);
+        return;
+    };
+
+    let cols = Layout::horizontal([
+        Constraint::Length(AVATAR_COLS),
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .split(inner);
+    frame.render_widget(Image::new(avatar), cols[0]);
+    frame.render_widget(Paragraph::new(header_lines), cols[2]);
 }
 
 fn draw_stream_list(frame: &mut Frame, area: Rect, detail: &VtuberDetail, app: &App) {
