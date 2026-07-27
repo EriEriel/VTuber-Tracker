@@ -398,11 +398,19 @@ vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
       return byTime.get(bucketStart) ?? 0;
     });
 
+    // Dense bucket-start dates ("YYYY-MM-DD", UTC), parallel to counts, so
+    // clients can label bars without doing their own calendar math — the
+    // Rust CLI deliberately carries no date crate.
+    const starts = Array.from({ length: buckets }, (_, i) =>
+      new Date(from.getTime() + i * stepMs).toISOString().slice(0, 10)
+    );
+
     return c.json({
       unit,
       from: from.toISOString(),
       firstStreamAt: firstStream ? firstStream.startTime.toISOString() : null,
       counts,
+      starts,
     });
   } catch (error) {
     return c.json({ error: 'Failed to compute stream frequency', detail: String(error) }, 500);
