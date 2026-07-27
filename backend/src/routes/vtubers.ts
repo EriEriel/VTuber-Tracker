@@ -375,22 +375,28 @@ vtubersRoute.get('/api/vtubers/:id/stats/stream-frequency', async (c) => {
       },
     ]);
 
+    // Oldest stream on record. Buckets that predate it aren't "zero streams",
+    // they're "not yet tracking" — returned as null (below) so clients can
+    // render absent differently from a genuinely quiet week, without having
+    // to do their own date math. No streams at all means every bucket is null.
+    const firstStream = await Stream.findOne({
+      vtuberId: vtuber._id,
+      status: { $in: ['live', 'ended'] },
+    }).sort({ startTime: 1 });
+    const firstStreamMs = firstStream ? firstStream.startTime.getTime() : Infinity;
+
     // $group only emits buckets that have data; densify so a quiet week shows
     // as an explicit 0 instead of silently missing from the series.
     const byTime = new Map<number, number>(
       grouped.map((g) => [new Date(g._id).getTime(), g.count])
     );
-    const counts = Array.from(
-      { length: buckets },
-      (_, i) => byTime.get(from.getTime() + i * stepMs) ?? 0
-    );
-
-    // Oldest stream on record. Buckets before this are "not yet tracking",
-    // not "zero streams" — the client renders them as absent rather than 0.
-    const firstStream = await Stream.findOne({
-      vtuberId: vtuber._id,
-      status: { $in: ['live', 'ended'] },
-    }).sort({ startTime: 1 });
+    const counts = Array.from({ length: buckets }, (_, i): number | null => {
+      const bucketStart = from.getTime() + i * stepMs;
+      // A bucket that ends on/before the first recorded stream contains no
+      // tracked time at all; the bucket *containing* it stays numeric.
+      if (bucketStart + stepMs <= firstStreamMs) return null;
+      return byTime.get(bucketStart) ?? 0;
+    });
 
     return c.json({
       unit,
