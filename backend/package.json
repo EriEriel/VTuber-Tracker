@@ -1,5 +1,6 @@
 {
   "name": "VTuber-Tracker",
+  "license": "MIT",
   "scripts": {
     "dev": "bun run --hot src/index.ts"
   },
