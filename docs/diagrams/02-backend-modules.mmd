@@ -1,0 +1,78 @@
+flowchart TB
+  IDX["index.ts<br/><small>entry &middot; Bun.serve</small>"]
+
+  subgraph ROUTES["&nbsp;routes/&nbsp;"]
+    direction LR
+    RV["vtubers.ts<br/><small>CRUD + stats</small>"]
+    RS["sync.ts<br/><small>manual triggers</small>"]
+    RE["eventsub.ts<br/><small>HMAC &middot; dedupe &middot; 204</small>"]
+  end
+
+  subgraph LIB["&nbsp;lib/&nbsp;"]
+    direction LR
+    SY["sync.ts<br/><small>syncFromHolodex/Youtube/Twitch</small>"]
+    LS["live-state.ts<br/><small>markLive &middot; markEnded</small>"]
+    SCH["scheduler.ts<br/><small>two poll loops</small>"]
+    TES["twitch-eventsub.ts<br/><small>reconcile &middot; handleNotification</small>"]
+    TT["twitch-token.ts<br/><small>app token cache</small>"]
+    DB["db.ts<br/><small>singleton connect</small>"]
+    RAT["require-api-token.ts<br/><small>bearer middleware</small>"]
+  end
+
+  subgraph MAP["&nbsp;lib/mappers/ &mdash; the anti-corruption layer&nbsp;"]
+    direction LR
+    MH["holodex.mappers.ts"]
+    MY["youtube.mapper.ts"]
+    MT["twitch.mapper.ts"]
+  end
+
+  MODELS["models/<br/><small>VTuber &middot; Stream &middot; Clip &middot; StatSnapshot<br/>Zod schema + Mongoose model each</small>"]
+
+  IDX --> RV
+  IDX --> RS
+  IDX --> RE
+  IDX --> DB
+  IDX --> RAT
+  IDX --> TES
+  IDX --> SCH
+
+  RV --> SY
+  RV --> TES
+  RV --> MODELS
+  RS --> SY
+  RE --> TES
+
+  SCH --> SY
+  SCH --> LS
+  SCH --> MH
+  SCH --> MY
+  SCH --> MODELS
+
+  TES --> SY
+  TES --> LS
+  TES --> TT
+  TES --> MODELS
+
+  SY --> LS
+  SY --> TT
+  SY --> MH
+  SY --> MY
+  SY --> MT
+  SY --> MODELS
+
+  LS --> MODELS
+  MH --> MODELS
+  MY --> MODELS
+  MT --> MODELS
+
+  classDef entry  fill:#ffe8cc,stroke:#a1690b,color:#4a3200,stroke-width:1px;
+  classDef route  fill:#d0ebff,stroke:#1864ab,color:#0a2d4d,stroke-width:1px;
+  classDef lib    fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13,stroke-width:1px;
+  classDef mapper fill:#f3d9fa,stroke:#862e9c,color:#3b0764,stroke-width:1px;
+  classDef store  fill:#c5f6fa,stroke:#0b7285,color:#062e35,stroke-width:1px;
+
+  class IDX entry;
+  class RV,RS,RE route;
+  class SY,LS,SCH,TES,TT,DB,RAT lib;
+  class MH,MY,MT mapper;
+  class MODELS store;

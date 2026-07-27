@@ -1,0 +1,48 @@
+flowchart TB
+  subgraph TWP["&nbsp;Twitch &mdash; push, seconds&nbsp;"]
+    direction TB
+    ON(["stream.online"]) --> CB
+    OFF(["stream.offline"]) --> CB
+    CB["POST /eventsub/callback<br/><small>1. required headers<br/>2. timestamp &lt; 10 min<br/>3. HMAC over id+ts+RAW body<br/>4. dedupe message-id</small>"]
+    CB --> R204["respond 204 immediately"]
+    R204 --> HN["handleNotification()<br/><small>fire-and-forget &mdash; the sync<br/>exceeds Twitch's 10s budget</small>"]
+  end
+
+  subgraph YTP["&nbsp;YouTube &mdash; poll, up to 5 min&nbsp;"]
+    direction TB
+    TICK(["every 5 min"]) --> PC["pollCycle()"]
+    PC --> PH["pollHolodexPopulation()<br/><small>source: holodex<br/>ONE unfiltered /live call,<br/>filtered against tracked ids</small>"]
+    PC --> PY["pollYoutubeApiPopulation()<br/><small>source: youtube_api<br/>RSS per channel &rarr; candidate ids<br/>+ everything believed live<br/>&rarr; videos.list, 50 per unit</small>"]
+  end
+
+  HN -->|online| SFT["syncFromTwitch(id, force=true)"]
+  HN -->|offline| ME
+  PH --> MH["mapHolodexStream()"]
+  PY --> MY["mapYoutubeStream()"]
+  MH --> ML
+  MY --> ML
+  SFT --> ML
+
+  ML["markLive(vtuberId, stream)<br/><small>1. was it already live? (edge test)<br/>2. close OTHER live docs<br/>3. upsert this one<br/>returns true only on the edge</small>"]
+  ME["markEnded(vtuberId, externalId?)<br/><small>status: ended, endTime: now<br/>id optional &mdash; offline names no stream</small>"]
+
+  ML --> STR[("Stream")]
+  ME --> STR
+
+  PH -.->|"tracked but absent this cycle"| ME
+  PY -.->|"believed live, not confirmed"| ME
+
+  G1{{"Holodex returned 0<br/>but had &gt;0 last cycle?<br/>&rarr; skip the offline pass"}} -.-> PH
+  G2{{"any videos.list batch failed?<br/>&rarr; skip the offline pass"}} -.-> PY
+
+  classDef evt   fill:#f3d9fa,stroke:#862e9c,color:#3b0764;
+  classDef timer fill:#fff3bf,stroke:#a1690b,color:#4a3200;
+  classDef fn    fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13;
+  classDef store fill:#c5f6fa,stroke:#0b7285,color:#062e35;
+  classDef warn  fill:#ffe3e3,stroke:#c92a2a,color:#4d0f0f;
+
+  class ON,OFF evt;
+  class TICK timer;
+  class CB,R204,HN,SFT,PC,PH,PY,MH,MY,ML,ME fn;
+  class STR store;
+  class G1,G2 warn;

@@ -1,0 +1,27 @@
+flowchart LR
+  P["fetch_live_vtubers()<br/><small>20s timeout</small>"] --> R{"result?"}
+  R -->|401| DIE["exit non-zero<br/><small>no retry fixes a bad token</small>"]
+  R -->|error| BO["backoff after 3 failures<br/><small>doubling, capped at 300s</small>"]
+  R -->|ok| AP["apply(state, Ok(entries))"]
+  BO --> AP2["apply(state, Err(()))<br/><small>changes NOTHING</small>"]
+
+  AP --> DD["dedupe_one_per_vtuber()"]
+  DD --> ST{"state?"}
+  ST -->|Seeding| SEED["Seeded(keys)<br/><small>show, notify for none</small>"]
+  ST -->|Tracking| DIFF["new keys &rarr; fresh<br/>absent keys &rarr; miss+1"]
+  DIFF --> EV{"missed twice?"}
+  EV -->|yes| DROP["evict"]
+  EV -->|no| HOLD["hold one more round"]
+  DIFF --> N{"how many fresh?"}
+  N -->|"1..3"| WL["WentLive each"]
+  N -->|"&gt;3"| BW["BurstWentLive summary"]
+  WL --> NS["notify-send"]
+  BW --> NS
+
+  classDef fn   fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13;
+  classDef gate fill:#fff3bf,stroke:#a1690b,color:#4a3200;
+  classDef bad  fill:#ffe3e3,stroke:#c92a2a,color:#4d0f0f;
+
+  class P,AP,AP2,DD,SEED,DIFF,DROP,HOLD,WL,BW,NS,BO fn;
+  class R,ST,EV,N gate;
+  class DIE bad;

@@ -1,0 +1,38 @@
+flowchart TB
+  IN(["syncFromX(vtuberId?, force)"]) --> Q["VTuber.find({ source, isTracked: true })<br/><small>+ _id when an id was given</small>"]
+  Q --> LOOP["for each VTuber"]
+  LOOP --> G1{"force<br/>or lastLiveSyncedAt<br/>older than 15 min?"}
+  LOOP --> G2{"force<br/>or lastStatsSyncedAt<br/>older than 24 h?"}
+  G1 -->|no| SKIP["skipped: data is fresh"]
+  G2 -->|no| SKIP
+
+  G1 -->|yes| LIVE["LIVE HALF<br/><small>Holodex: /channels/:id/videos<br/>YouTube: uploads playlist &rarr; videos<br/>Twitch: /streams + /videos VODs</small>"]
+  G2 -->|yes| STATS["STATS HALF<br/><small>channel profile refresh<br/>+ StatSnapshot.create()<br/>+ clips upsert</small>"]
+
+  LIVE --> MAPPED["map*Stream()"]
+  MAPPED --> ISLIVE{"mapped.status<br/>=== 'live'?"}
+  ISLIVE -->|yes| ML["markLive()"]
+  ISLIVE -->|no| UP["Stream.findOneAndUpdate<br/>upsert on platform+externalId"]
+
+  STATS --> SS[("StatSnapshot")]
+  STATS --> CL[("Clip")]
+  STATS --> VT[("VTuber<br/><small>name/photo/org refreshed in place</small>")]
+  ML --> ST[("Stream")]
+  UP --> ST
+
+  LIVE --> OK1{"HTTP ok?"}
+  STATS --> OK2{"HTTP ok?"}
+  OK1 -->|yes| T1["lastLiveSyncedAt = now"]
+  OK2 -->|yes| T2["lastStatsSyncedAt = now"]
+  OK1 -->|no| KEEP["timestamp untouched<br/><small>so the next call retries</small>"]
+  OK2 -->|no| KEEP
+
+  classDef fn    fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13;
+  classDef gate  fill:#fff3bf,stroke:#a1690b,color:#4a3200;
+  classDef store fill:#c5f6fa,stroke:#0b7285,color:#062e35;
+  classDef muted fill:#e9ecef,stroke:#868e96,color:#212529;
+
+  class IN,Q,LOOP,LIVE,STATS,MAPPED,ML,UP,T1,T2 fn;
+  class G1,G2,ISLIVE,OK1,OK2 gate;
+  class SS,CL,VT,ST store;
+  class SKIP,KEEP muted;

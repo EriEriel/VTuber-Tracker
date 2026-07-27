@@ -1,0 +1,32 @@
+flowchart TB
+  RUN["tui::run()"] --> PH["install_panic_hook()<br/><small>restores terminal BEFORE the<br/>default hook prints &mdash; else the<br/>message paints onto a buffer<br/>the terminal discards</small>"]
+  PH --> ST["setup_terminal()<br/><small>raw mode + alternate screen</small>"]
+  ST --> PICK["Picker::from_query_stdio()<br/><small>must run AFTER raw mode</small>"]
+  PICK --> SP1["spawn_fetch_vtubers()"]
+  PICK --> SP2["spawn_live_ticker(interval)"]
+  SP1 --> LOOP
+  SP2 --> LOOP
+
+  LOOP["run_loop &mdash; tokio::select!"]
+  LOOP --> DRAW["terminal.draw(ui::draw)"]
+
+  LOOP --> EVS["EventStream<br/><small>async, not blocking poll &mdash;<br/>a blocking read would stall<br/>the whole runtime</small>"]
+  EVS --> HE["event::handle_event(&amp;mut App)<br/><small>sync mutator, returns Option&lt;Command&gt;</small>"]
+  HE --> DIS["dispatch(cmd, tx)<br/><small>the ONLY place that knows<br/>Command &rarr; routes call</small>"]
+  DIS --> TASK["tokio::spawn"]
+  TASK --> MSG
+
+  LOOP --> RX["rx.recv()"]
+  MSG["Message<br/><small>Vtubers | Detail | Live | Avatar<br/>Thumbnail | Frequency | Trend<br/>Duration | ActionDone | ActionFailed</small>"] --> RX
+  RX --> HM["handle_message(&amp;mut App)<br/><small>returns (refresh?, follow_up?)</small>"]
+  HM --> LOOP
+
+  LOOP --> TICK["spinner tick<br/><small>only polled while pending &gt; 0</small>"]
+
+  classDef setup fill:#ffe8cc,stroke:#a1690b,color:#4a3200;
+  classDef core  fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13;
+  classDef msg   fill:#d0ebff,stroke:#1864ab,color:#0a2d4d;
+
+  class RUN,PH,ST,PICK,SP1,SP2 setup;
+  class LOOP,DRAW,HE,DIS,TASK,HM,TICK core;
+  class EVS,RX,MSG msg;

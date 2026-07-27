@@ -1,0 +1,53 @@
+erDiagram
+  VTUBER ||--o{ STREAM : "vtuberId"
+  VTUBER ||--o{ CLIP : "vtuberId"
+  VTUBER ||--o{ STATSNAPSHOT : "vtuberId"
+  STREAM ||--o{ CLIP : "sourceStreamId (Twitch only)"
+
+  VTUBER {
+    string name
+    string englishName
+    string photo
+    enum platform "youtube | twitch"
+    enum source "holodex | youtube_api | twitch_api"
+    string platformChannelId "UC... or NUMERIC twitch id"
+    string org
+    string suborg
+    bool isTracked
+    date lastLiveSyncedAt "15 min gate"
+    date lastStatsSyncedAt "24 h gate"
+    date lastSyncedAt
+  }
+
+  STREAM {
+    objectId vtuberId
+    string externalId "stable per-stream identity"
+    string title
+    enum platform
+    date startTime "REWRITTEN on re-upsert"
+    date endTime
+    number duration "seconds, null while live"
+    enum status "upcoming | live | ended | unknown"
+    string url "constant per Twitch CHANNEL"
+    string thumbnailUrl
+    enum sourceApi
+  }
+
+  CLIP {
+    objectId vtuberId
+    objectId sourceStreamId "null for Holodex"
+    string externalId
+    string title
+    string url
+    number viewCount
+    date createdAt
+    enum sourceApi
+  }
+
+  STATSNAPSHOT {
+    objectId vtuberId
+    number subscriberCount "followers, for Twitch"
+    number viewCount "always 0 for Twitch"
+    date capturedAt
+    enum sourceApi
+  }

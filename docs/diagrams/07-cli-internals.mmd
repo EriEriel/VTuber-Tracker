@@ -1,0 +1,56 @@
+flowchart LR
+  subgraph MAIN["&nbsp;main.rs &mdash; clap subcommands&nbsp;"]
+    direction TB
+    C1["list / lookup / live"]
+    C2["jump / create / delete / sync"]
+    C3["watch"]
+    C4["tui"]
+    C5["config"]
+  end
+
+  subgraph ROUTES["&nbsp;routes.rs &mdash; one fn per endpoint&nbsp;"]
+    direction TB
+    RB["read_body()<br/><small>checks STATUS before serde &mdash;<br/>so a 401 isn't a type error</small>"]
+    AE["ApiError<br/><small>Unauthorized | Http | Transport<br/>| Decode | Invalid</small>"]
+  end
+
+  subgraph CFG["&nbsp;config.rs&nbsp;"]
+    direction TB
+    CL["client()<br/><small>OnceLock + bearer token<br/>as a default header</small>"]
+    XC["external_client()<br/><small>NO token &mdash; CDN thumbnails</small>"]
+  end
+
+  W["watch.rs<br/><small>apply(state, poll) &rarr; (state, actions)<br/>pure; the loop is glue</small>"]
+  N["notify.rs<br/><small>shells out to notify-send</small>"]
+  TH["theme.rs<br/><small>ColoredString</small>"]
+  VIU["viuer<br/><small>inline images, plain CLI only</small>"]
+
+  BE(["backend /api/*"])
+  CDN(["Twitch / YouTube CDNs"])
+
+  C1 --> ROUTES
+  C2 --> ROUTES
+  C3 --> W
+  C4 --> TUIB["tui/"]
+  C5 --> CFG
+
+  W --> ROUTES
+  W --> N
+  RB --> AE
+  ROUTES --> CL
+  ROUTES --> XC
+  ROUTES --> VIU
+  CL --> BE
+  XC --> CDN
+  C1 --> TH
+  W --> TH
+
+  classDef cmd    fill:#e7f5ff,stroke:#1864ab,color:#0a2d4d;
+  classDef net    fill:#d3f9d8,stroke:#2b8a3e,color:#0b2e13;
+  classDef cfgc   fill:#fff3bf,stroke:#a1690b,color:#4a3200;
+  classDef extern fill:#f3d9fa,stroke:#862e9c,color:#3b0764;
+
+  class C1,C2,C3,C4,C5,TUIB,TH cmd;
+  class RB,AE,W,N,VIU net;
+  class CL,XC cfgc;
+  class BE,CDN extern;

@@ -1,0 +1,16 @@
+{
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    "fontSize": "13px",
+    "lineColor": "#7b8b90",
+    "textColor": "#4a5c62",
+    "mainBkg": "#eef4f6",
+    "nodeBorder": "#7b8b90",
+    "clusterBkg": "transparent",
+    "clusterBorder": "#b9cdd4",
+    "edgeLabelBackground": "transparent"
+  },
+  "flowchart": { "htmlLabels": true, "curve": "basis", "padding": 8 },
+  "er": { "fill": "#eef4f6", "stroke": "#0b7285" }
+}
