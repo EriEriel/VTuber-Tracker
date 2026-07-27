@@ -12,6 +12,24 @@ Track the streamers you watch from one place in the terminal — list them, look
 
 The CLI talks to the backend over HTTP. It defaults to `http://localhost:3000`, so the backend must be running first — see [CLI configuration](#cli-configuration) to point it elsewhere.
 
+## Documentation
+
+Start with **[`OVER_VIEW.html`](OVER_VIEW.html)** — open it in a browser. It's a single self-contained file (no network, no CDN, no JavaScript) tracing how the pieces actually connect at *file* level rather than layer level: the boot sequence, both live-detection paths converging on `live-state.ts`, the shared sync skeleton and its two gates, the data model's indexes and traps, the CLI and TUI internals, and a table of which module is allowed to write which field.
+
+| Doc | What it covers |
+|---|---|
+| [`OVER_VIEW.html`](OVER_VIEW.html) | Architecture map — ten sections of diagrams, down to `scheduler.ts` → `live-state.ts` |
+| [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) | Every endpoint's actual JSON shape, captured from a running backend rather than read off the handlers — which fields are genuinely optional, and the Rust type each maps to |
+| [`LIVE_DETECTION.md`](LIVE_DETECTION.md) | The three-phase design plan the current live-detection stack was built from |
+| [`TWITCH_EVENTSUB.md`](TWITCH_EVENTSUB.md) | The Twitch half as it runs: webhook transport, app-token auth, the signature-verification traps |
+| [`YOUTUBE_LIVE.md`](YOUTUBE_LIVE.md) | The YouTube half: two populations needing different mechanisms, quota math, the failed-poll guards |
+| [`TUI_DEVELOPMENT.md`](TUI_DEVELOPMENT.md) | The TUI's phase plan, keymap, and the traps that were verified the hard way |
+| [`CLAUDE.md`](CLAUDE.md) · [`backend/CLAUDE.md`](backend/CLAUDE.md) | Working notes — the load-bearing oddities and what happens if you "fix" them |
+
+`docs/API_CONTRACT.md` is backed by executable checks: `cd cli && cargo test -- --ignored` calls each endpoint through the CLI's real serde types, so drift shows up as a failing test rather than as a user's `oshihub` dying on a parse error. Plain `cargo test` stays offline.
+
+Diagram sources live in [`docs/diagrams/`](docs/diagrams/) as Mermaid `.mmd` files, with `regen.py` rendering them into the page. `OVER_VIEW.html` carries them as **inlined SVG** — that's what makes it work offline, and it also means those `<svg>` blocks are generated output. Edit the `.mmd`, not the HTML.
+
 ## Requirements
 
 - **[Bun](https://bun.com) — canary, or stable ≥ 1.4.** ⚠️ Stable 1.3.x **crashes on startup**: `mongoose` pulls in `bson` 7.3.1, which calls `node:v8`'s `startupSnapshot.isBuildingSnapshot()` at import time, and that throws `ERR_NOT_IMPLEMENTED` on 1.3.x. Install canary with `bun upgrade --canary`. Verify with:
@@ -167,7 +185,7 @@ oshihub watch --notify-existing    # also notify for whoever is already live
 For a single platform, you probably should — this isn't trying to beat Twitch at delivering Twitch alerts. The case for it is that they're *two separate systems*, neither of which you control:
 
 - **One feed instead of two.** Twitch notifies through Twitch, YouTube through YouTube, each with its own settings, delivery quirks, and places to miss things. This is one stream of notifications for both, driven by the same roster you already manage with `create`/`list`.
-- **No browser, no account, no bell.** Web push needs a browser running with the site permission granted; the apps need an account you're logged into and a notification toggle you remembered to set. `oshihub watch` is a ~4 MB resident process, and it notifies for anyone you've *registered* — whether you follow them is irrelevant. Useful if you'd rather not have an account, or not be logged into one.
+- **No browser, no account, no bell.** Web push needs a browser running with the site permission granted; the apps need an account you're logged into and a notification toggle you remembered to set. `oshihub watch` sits at ~15 MB resident (measured over a 16-hour run; ~24 MB peak), and it notifies for anyone you've *registered* — whether you follow them is irrelevant. Useful if you'd rather not have an account, or not be logged into one.
 - **It reports state, not intent.** The notification fires because the API says the stream is live. YouTube's bell in particular is well known for quietly not delivering, and neither platform tells you when it decided to skip one.
 - **They're ordinary desktop notifications, so your rules apply.** Under mako, `[app-name=oshihub]` lets you restyle, group, or route them, and they honour do-not-disturb like anything else on the system. No browser tab has to be open for one to arrive.
 
