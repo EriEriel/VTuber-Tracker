@@ -8,7 +8,13 @@ YouTube, and Twitch into MongoDB, plus `oshihub`, a Rust CLI client.
 ```
 backend/   Hono/Bun REST API (TypeScript)   — see backend/CLAUDE.md for detail
 cli/       oshihub — Rust CLI (clap + reqwest + tokio)
+docs/      API_CONTRACT.md + diagrams/ (Mermaid sources for OVER_VIEW.html)
 ```
+
+**`OVER_VIEW.html` is the architecture map** — every module and how it connects,
+at file level. It's a browser page, so it's for the human; the sections below
+are the text equivalent for working in here. Don't dedupe one against the
+other, they have different readers.
 
 ## Read first — things that will bite you
 
@@ -54,11 +60,22 @@ docker build -t oshihub-backend . # container build
 # cli/
 cargo build
 cargo test                        # unit tests only, no network
+cargo test -- --ignored           # contract tests; hits the backend in config.rs
 cargo run -- <command>
+
+# docs/
+python3 docs/diagrams/regen.py    # ONLY after editing a .mmd — see below
 ```
 
 There is no test framework on the backend; `integration.test.ts` is a standalone
 script that hits real APIs and the real database.
+
+`cargo test -- --ignored` runs `cli/src/contract.rs`, which calls each endpoint
+through the CLI's own serde types to catch backend drift. The frozen fixtures
+in `models.rs`/`routes.rs` can only prove the types parsed the backend *on the
+day each capture was taken*; these prove it still does. Shapes are recorded in
+`docs/API_CONTRACT.md`. Target follows `config.rs`, so
+`OSHIHUB_API_URL=http://localhost:3000 cargo test -- --ignored` checks local.
 
 ## CLI architecture
 
@@ -190,6 +207,21 @@ rather than quietly serving an open API.
 
 ## Design docs (tracked)
 
+- `OVER_VIEW.html` — the architecture map, ten sections of diagrams: system
+  map, backend module graph, boot sequence, the live path, the sync path, the
+  data model, CLI internals, the TUI message loop, endpoint reference, and a
+  "who writes what" table. Self-contained (inlined SVG, no network, no JS) so
+  it opens from disk. **Its `<svg>` blocks are generated** — edit
+  `docs/diagrams/*.mmd` and run `regen.py`, never the HTML.
+- `docs/diagrams/` — the nine Mermaid sources, the render configs, and
+  `regen.py`. Its README explains why regenerating churns a 400KB diff even
+  when nothing changed (mermaid-cli measures text in headless Chromium, so
+  layout coordinates vary run to run), and why labels must use HTML entities.
+- `docs/API_CONTRACT.md` — every endpoint's actual JSON shape, captured from
+  the running production backend rather than read off the handlers: the
+  Mongoose envelope, which fields are genuinely optional, dense-vs-sparse
+  stats semantics, and the Rust type each maps to. Paired with
+  `cli/src/contract.rs` (above) so drift fails a test instead of a user's CLI.
 - `LIVE_DETECTION.md` — the plan the current live-detection stack was built
   from, in three phases: the shared `live-state.ts` writer, Twitch's move to
   webhook transport, and YouTube polling. All implemented. Read it for *why*

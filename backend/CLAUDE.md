@@ -4,6 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 See the repo-root `CLAUDE.md` for cross-cutting concerns: the Bun canary requirement, the deployed instance, and why only one backend may run at a time.
 
+Two references worth having open:
+
+- **`OVER_VIEW.html`** (repo root, opens offline) — sections 02–06 are this backend: the module graph, `index.ts`'s boot sequence, both live-detection paths converging on `live-state.ts`, the shared `syncFrom*` skeleton, and the data model with its indexes.
+- **`docs/API_CONTRACT.md`** — what each endpoint actually returns, captured from production. **Change a response shape and this doc plus `cli/src/contract.rs` need updating in the same commit**, or the CLI breaks with no compile-time warning. `cd cli && cargo test -- --ignored` is the check.
+
 ## Commands
 
 ```sh
@@ -77,6 +82,8 @@ During sync, `VTuber.source` routes to the correct sync function.
 - **YouTube quota:** 10,000 units/day. Use direct ID lookups only — never `search.list` (100 units/call). Direct channel/video/playlist lookups are cheap.
 - **Upsert pattern:** Streams and Clips use `findOneAndUpdate` with `{ upsert: true, returnDocument: 'after' }` — sync is idempotent.
 - **Twitch clips vs YouTube clips:** Conceptually different artifacts (native Twitch clip vs. YouTube community re-upload). Mappers must not assume structural symmetry.
+- **`source: 'youtube_api'` VTubers have no clips, ever — by design.** Only `syncFromHolodex` and `syncFromTwitch` write `Clip` docs; `syncFromYoutube` never references the model. A YouTube clip is a *third-party* re-upload, so finding one needs `search.list` at 100 units per channel per sync — unaffordable against the 10,000/day budget. HoloDex escapes this with a curated clips endpoint, Twitch because clips are first-class objects with an owner. **Verified empty across all 9 such VTubers in production; this is not a bug to fix.** (`bug-report.md` #12.)
+- **`StatSnapshot.viewCount` is YouTube-only, and currently has no reader.** `mapTwitchStatSnapshot` hardcodes `0` because Helix removed lifetime channel views and offers no replacement — concurrent viewers are a different quantity. Nothing in `routes/`, the CLI or the TUI reads the field; the dashboard trend uses `subscriberCount` alone. Don't chart it without fixing the Twitch half first. Note `Clip.viewCount` is a *different* field that **is** populated and displayed. (`bug-report.md` #11.)
 - **Route order matters:** Hono matches top-to-bottom and `:id` is a wildcard, so literal paths must be registered before parameterised siblings.
 
 ## Environment Variables

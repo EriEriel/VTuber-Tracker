@@ -349,6 +349,8 @@ Every sync afterward (`syncFromTwitch`) uses only the numeric ID for Twitch API 
 
 In both cases, `platformChannelId` is set from the **canonical channel ID returned by the API** (`data.id` / `resolved.id`), never the raw handle/URL string — so a handle or URL is only ever used to look the channel up once, the same way Twitch login names are.
 
+**Which source you land on decides whether you get clips.** A VTuber resolved through HoloDex or Twitch gets clips; one that fell back to `source: 'youtube_api'` shows an **empty clips list permanently**, and that's expected rather than a sync failure. A "clip" of a YouTube VTuber is a re-upload on somebody else's channel, so finding them means a `search.list` call at 100 quota units per channel per sync, against a 10,000/day budget — HoloDex can do it because it maintains curated clip relations, and Twitch because clips are first-class objects owned by the channel. `lookup` and the TUI's Detail pane will just show `(none)`.
+
 ### Profile URL resolution
 
 `GET /api/vtubers/:id/profile-url` returns a browsable channel URL for a VTuber, computed differently per platform:
@@ -381,3 +383,4 @@ Known gaps:
 - `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify; same is true of two TUI sessions polling live status independently.
 - TUI images (avatar + stream preview) only render on the Detail screen, not on List rows — a deliberate scope cut, not a bug.
 - The trend chart's 7/30-day deltas need that much snapshot history before they show anything — a freshly deployed backend displays "no 7-day baseline yet" for the first week.
+- YouTube VTubers that aren't on HoloDex (`source: 'youtube_api'`) never get clips — see [YouTube channel handle/URL resolution](#youtube-channel-handleurl-resolution) for why. Not a sync failure; there's no affordable way to find them.

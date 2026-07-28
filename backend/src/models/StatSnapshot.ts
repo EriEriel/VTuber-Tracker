@@ -20,6 +20,13 @@ const StatSnapshotSchema = new Schema<IStatSnapshot>(
   {
     vtuberId: { type: Schema.Types.ObjectId, ref: 'VTuber', required: true },
     subscriberCount: { type: Number, required: true },
+    // Lifetime channel views. YouTube/HoloDex only — mapTwitchStatSnapshot
+    // writes 0 because Helix removed lifetime views and has no replacement
+    // (concurrent viewers are a different quantity, not a substitute).
+    // Currently write-only: nothing in routes/, the CLI or the TUI reads it,
+    // and the dashboard's trend line uses subscriberCount. Anything that
+    // starts charting this has to handle the Twitch zeros first, or a Twitch
+    // VTuber will render as a flat line at the bottom.
     viewCount: { type: Number, required: true },
     capturedAt: { type: Date, default: Date.now, required: true },
     sourceApi: { type: String, enum: ['holodex', 'youtube_api', 'twitch_api'], required: true },
