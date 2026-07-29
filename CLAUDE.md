@@ -88,6 +88,15 @@ day each capture was taken*; these prove it still does. Shapes are recorded in
   `reqwest::Client` in a `OnceLock` with the bearer token as a default header.
   **`external_client()` exists deliberately**: thumbnail fetches hit Twitch and
   YouTube CDNs and must *not* carry our token.
+- `lock.rs` — the runtime-dir coordination files, both PID-stamped:
+  `watch.lock` (single-instance lock — a second `oshihub watch` refuses to
+  start) and `tui.<pid>.presence` (each open TUI marks itself; watch skips
+  popups while any live mark exists). Lives in `$XDG_RUNTIME_DIR/oshihub`,
+  tmpfs, so reboots clear it. **Stale files are the normal case, not the
+  exception**: SIGTERM (every `systemctl --user stop`) skips `Drop`, so the
+  dead-PID checks do the real cleanup; `Drop` only covers Ctrl-C and error
+  returns. A presence mark is a signal, not a lock — the TUI must never
+  block watch from *running*, only from popping up.
 - `theme.rs` — all colouring **for the CLI**. The `colored` crate handles
   `NO_COLOR`/TTY detection itself, so call sites colour unconditionally. Add
   new colours here rather than inline, so a concept keeps one colour everywhere.
@@ -254,10 +263,12 @@ rather than quietly serving an open API.
 
 ## Known gaps
 
-`oshihub watch` takes no lock, so a terminal instance plus the enabled
-`oshihub-watch.service` user unit both notify (documented, not solved — a
-lockfile would be the CLI's second disk write); this is also why the TUI
-deliberately won't notify. The TUI itself, developed directly on `main`, is
+~~`oshihub watch` takes no lock~~ — solved (see `lock.rs` above): a second
+watch refuses to start with the holder's PID, and an open TUI silences
+watch's popups (the go-live still lands in the journal with a "suppressed"
+note). The TUI still sends no notifications of its own — watch is the one
+notifier, the TUI just quiets it while a dashboard is on screen. The TUI
+itself, developed directly on `main`, is
 **v0.1 complete**: Phases 0–7 ship (list, detail, live badges, search/filter,
 sync/delete/create, edit, auto-refresh). Phase 7.5 has landed a VTuber avatar
 in Detail's header and a focus-following stream thumbnail preview pane, both

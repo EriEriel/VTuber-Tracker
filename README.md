@@ -221,7 +221,9 @@ Then `systemctl --user daemon-reload && systemctl --user enable --now oshihub-wa
 
 `ExecStart` points at the *installed* binary, so re-run `cargo install --path cli` and `systemctl --user restart oshihub-watch` after changing the CLI — otherwise the service keeps running the old build.
 
-A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't loop on it. Note there's no locking: a terminal instance *and* an enabled service means two watchers and duplicate notifications.
+A bad token exits non-zero rather than retrying, so `Restart=on-failure` won't loop on it.
+
+Only one watcher runs at a time: a second `oshihub watch` prints `already running (pid N)` and exits instead of double-notifying next to the service. If the service loses that race to a terminal instance, `Restart=on-failure` retries every 30s until the terminal one exits, then takes back over. While an `oshihub tui` is open, watch stays running but skips the popups (the dashboard already shows who's live); they resume the moment the TUI closes, with no late or duplicate notifications for streams that started in between.
 
 ### TUI (`oshihub tui`)
 
@@ -376,11 +378,11 @@ CLI coverage of the backend:
 - [x] Full-screen TUI (`tui`) — list, detail, live, search/filter, create/sync/delete/edit, auto-refresh
 - [x] TUI Detail avatar and stream thumbnail preview via `ratatui-image` (Phase 7.5)
 - [x] TUI stats dashboard (`g`) — stream frequency, median duration, follower/subscriber trend, backed by the `/stats/*` endpoints and the backend stats poller (Phase 8, v0.5.0)
+- [x] Single-instance `watch` lock, and popup silencing while a TUI is open (v0.5.2)
 
 Known gaps:
 
 - No one-shot `update` subcommand — `PUT /api/vtubers/:id` is only reachable through the TUI.
-- `watch` takes no lock, so a terminal instance and an enabled systemd service will both notify; same is true of two TUI sessions polling live status independently.
 - TUI images (avatar + stream preview) only render on the Detail screen, not on List rows — a deliberate scope cut, not a bug.
 - The trend chart's 7/30-day deltas need that much snapshot history before they show anything — a freshly deployed backend displays "no 7-day baseline yet" for the first week.
 - YouTube VTubers that aren't on HoloDex (`source: 'youtube_api'`) never get clips — see [YouTube channel handle/URL resolution](#youtube-channel-handleurl-resolution) for why. Not a sync failure; there's no affordable way to find them.
