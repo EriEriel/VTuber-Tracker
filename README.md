@@ -12,6 +12,25 @@ Track the streamers you watch from one place in the terminal — list them, look
 
 The CLI talks to the backend over HTTP. It defaults to `http://localhost:3000`, so the backend must be running first — see [CLI configuration](#cli-configuration) to point it elsewhere.
 
+## Contents
+
+- [Documentation](#documentation)
+- [Requirements](#requirements)
+- [Setup](#setup) — [API credentials](#1-api-credentials) · [Backend](#2-backend) · [CLI](#3-cli) · [Live detection](#4-live-detection-optional)
+- [CLI (`oshihub`)](#cli-oshihub)
+  - [Commands](#commands)
+  - [CLI configuration](#cli-configuration)
+  - [Desktop notifications (`oshihub watch`)](#desktop-notifications-oshihub-watch)
+  - [TUI (`oshihub tui`)](#tui-oshihub-tui)
+  - [Stack](#stack)
+- [Deployment](#deployment)
+- [Backend behavior](#backend-behavior)
+  - [Sync behavior](#sync-behavior)
+  - [Twitch channel name → ID resolution](#twitch-channel-name--id-resolution)
+  - [YouTube channel handle/URL resolution](#youtube-channel-handleurl-resolution)
+  - [Profile URL resolution](#profile-url-resolution)
+- [Status](#status)
+
 ## Documentation
 
 Start with **[`OVER_VIEW.html`](OVER_VIEW.html)** — open it in a browser. It's a single self-contained file (no network, no CDN, no JavaScript) tracing how the pieces actually connect at *file* level rather than layer level: the boot sequence, both live-detection paths converging on `live-state.ts`, the shared sync skeleton and its two gates, the data model's indexes and traps, the CLI and TUI internals, and a table of which module is allowed to write which field.
