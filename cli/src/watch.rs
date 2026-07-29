@@ -19,6 +19,7 @@ use std::io::IsTerminal;
 use std::time::Duration;
 
 use crate::config;
+use crate::lock;
 use crate::notify;
 use crate::routes::{ApiError, LiveEntry, fetch_live_vtubers};
 use crate::theme;
@@ -185,6 +186,28 @@ fn resolve_interval(flag: Option<u64>, configured: u64) -> u64 {
 }
 
 pub async fn run(opts: WatchOptions) -> Result<(), Box<dyn std::error::Error>> {
+    // Refuse to run alongside another watcher — two pollers means every
+    // go-live notifies twice (the terminal-instance-next-to-the-systemd-
+    // service trap). exit(1) rather than returning the error so the user
+    // sees the Display message instead of main's Debug dump of it; non-zero
+    // also keeps systemd's Restart=on-failure retrying until the other
+    // instance stops, at which point the service takes over again.
+    // `_lock` (not `_`): the guard must live until run() returns, or the
+    // lock would release the moment it was acquired.
+    let _lock = match lock::acquire() {
+        Ok(guard) => Some(guard),
+        Err(err @ lock::LockError::AlreadyRunning(_)) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        // An unwritable runtime dir shouldn't stop the watcher from doing
+        // its actual job. Running unguarded is the lesser evil — but say so.
+        Err(err) => {
+            eprintln!("Warning: running without the single-instance lock: {err}");
+            None
+        }
+    };
+
     let cfg = config::config();
     let interval_secs = resolve_interval(opts.interval_secs, cfg.watch_interval_secs);
     let notify_opts = notify::Options {
@@ -320,6 +343,17 @@ async fn handle_action(
             print_entry(entry);
             println!("  {}", theme::url(&entry.stream.url));
 
+            // A dashboard already on screen shows this go-live; a popup on
+            // top of it is noise. Only the popup is skipped — the state fold
+            // and the log line above already happened, so nothing re-fires
+            // when the TUI closes and there's no gap to re-seed. Checked per
+            // event, not per poll cycle: the TUI can open or close between
+            // two entries of the same burst of actions.
+            if lock::tui_is_present() {
+                println!("  {}", theme::muted("(notification suppressed: a TUI is open)"));
+                return;
+            }
+
             let platform = match entry.vtuber.platform {
                 crate::models::Platform::Youtube => "YouTube",
                 crate::models::Platform::Twitch => "Twitch",
@@ -356,6 +390,13 @@ async fn handle_action(
                     names.push(entry.vtuber.english_name.clone());
                 }
             }
+
+            // Same TUI-open rule as WentLive above.
+            if lock::tui_is_present() {
+                println!("  {}", theme::muted("(notification suppressed: a TUI is open)"));
+                return;
+            }
+
             notify::send(
                 notify::Content {
                     summary: format!("{} VTubers went live", keys.len()),

@@ -74,6 +74,15 @@ enum Message {
 pub async fn run() -> anyhow::Result<()> {
     install_panic_hook();
 
+    // Presence mark so `oshihub watch` stays quiet while a dashboard is on
+    // screen — a popup about a stream the TUI already shows is noise. Held
+    // for the whole session; Drop removes it on the Ok, Err, *and* panic
+    // paths (panics unwind — no panic="abort" in Cargo.toml — dropping this
+    // future's locals after the hook has restored the terminal). SIGKILL
+    // skips Drop, which is why `tui_is_present` sweeps dead PIDs.
+    // `_presence`, not `_`: the same keep-alive footgun as watch's `_lock`.
+    let _presence = crate::lock::mark_tui_present();
+
     let mut terminal = setup_terminal()?;
     let mut app = App::new();
 

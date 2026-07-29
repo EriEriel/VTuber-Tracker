@@ -4,6 +4,7 @@ mod config;
 // entirely rather than relying on dead-code elimination.
 #[cfg(test)]
 mod contract;
+mod lock;
 mod models;
 mod notify;
 mod routes;
