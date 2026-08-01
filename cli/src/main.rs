@@ -25,6 +25,8 @@ use crate::routes::{
     lookup_by_name,
     delete_vtuber_channel,
     sync_vtuber_channels,
+    update_vtuber_channel_by_name,
+    UpdateOverrides,
     print_thumbnail,
     print_stream_thumbnail,
 };
@@ -322,8 +324,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await?;
         }
-        Commands::Update { .. } => {
-            todo!("wired in task 5 (routes.rs support lands in task 4)")
+        Commands::Update {
+            name,
+            new_name,
+            english_name,
+            photo,
+            org,
+            suborg,
+            track,
+            untrack,
+        } => {
+            let overrides = UpdateOverrides {
+                name: new_name,
+                english_name,
+                photo,
+                org,
+                suborg,
+                track,
+                untrack,
+            };
+            match update_vtuber_channel_by_name(&name, overrides).await {
+                Ok(v) => println!(
+                    "Successfully updated VTuber channel name: {} with ID {}",
+                    v.english_name, v.id
+                ),
+                Err(err) => println!("Failed to update VTuber channel '{name}': {err}"),
+            }
         }
         Commands::Tui => tui::run().await?,
         Commands::Config => {
