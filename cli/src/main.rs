@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  {} {}", theme::heading("Status:"), theme::live_status(is_live));
 
                 println!("  {}", theme::heading("Recent streams:"));
-                if detail.streams.is_empty() {
+                if detail.streams.is_empty() || limit == 0 {
                     println!("    {}", theme::muted("(none)"));
                 } else {
                     for s in detail.streams.iter().take(limit) {
@@ -209,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 println!("  {}", theme::heading("Recent clips:"));
-                if detail.clips.is_empty() {
+                if detail.clips.is_empty() || limit == 0 {
                     println!("    {}", theme::muted("(none)"));
                 } else {
                     for c in detail.clips.iter().take(limit) {
