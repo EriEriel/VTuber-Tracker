@@ -231,11 +231,14 @@ twitch event verify-subscription stream.online \
       types = 8 subscriptions, `total_cost` 8 against `max_total_cost` 10,000 —
       the ceiling that motivated the whole migration is gone.
 - [x] Subscriptions survive a backend restart (bound to the URL, not a session).
-- [ ] **A real, unsimulated `stream.online` from a live channel** — the webhook
-      path has not yet been observed end-to-end in production. Watch
-      `ssh hetzner 'docker logs -f oshihub'` next time a tracked VTuber goes
-      live. (`oshihub watch` firing a desktop notification is the visible
-      downstream signal.)
+- [x] **Real, unsimulated `stream.online` and `stream.offline` events observed
+      end-to-end in production** (confirmed 2026-08-01). The container log shows
+      dozens of both — e.g. `2026-08-01T00:57:45.589Z Soymilk went offline on
+      Twitch — marked stream ended` — and the matching Stream doc served by
+      `GET /api/vtubers/:id` carries `status: 'ended'` with
+      `endTime: 2026-08-01T00:57:45.328Z`, the arrival-time stamp from
+      `markEnded`. Zero `Failed to handle EventSub notification` lines over the
+      same window.
 - [ ] `revocation` handling — implemented, never triggered.
 
 ---
