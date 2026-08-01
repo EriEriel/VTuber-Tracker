@@ -608,8 +608,8 @@ vtubersRoute.put('/api/vtubers/:id', async (c) => {
       englishName: z.string().min(1).optional(),
       photo: z.string().url().optional(),
       isTracked: z.boolean().optional(),
-      org: z.string().optional(),
-      suborg: z.string().optional(),
+      org: z.string().nullable().optional(),
+      suborg: z.string().nullable().optional(),
     });
 
     const parsed = UpdateSchema.safeParse(body);
