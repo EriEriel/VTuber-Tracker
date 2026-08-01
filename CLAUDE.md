@@ -213,6 +213,15 @@ rather than quietly serving an open API.
   with no warnings is still required; a compile error is not an "obvious pass".
 - Comments should explain *why*, especially where the code looks odd — most
   oddities here are load-bearing workarounds.
+- **Non-trivial work gets planned as Taskwarrior tasks first**, under
+  `project:VTuber-Tracker.<feature-slug>`, listed for approval before any code
+  is written. Each task's description must be specific enough to review
+  up front — the concrete step(s) to take (which file, which function, what
+  changes), not a vague label. Address existing tasks by UUID, never by ID —
+  IDs renumber whenever the pending set changes. Work **one task at a time**:
+  implement it, verify it (see the point above), then stop and wait for the
+  user's next command. Don't chain into the next task, don't mark a task
+  done — the user reviews and marks tasks done themselves.
 
 ## Design docs (tracked)
 
