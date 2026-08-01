@@ -190,6 +190,63 @@ pub struct UpdateFields {
     pub is_tracked: bool,
 }
 
+/// Which fields the plain CLI's `update` command was actually asked to
+/// change. `None`/`false` means "leave as-is" — resolved against the
+/// looked-up channel's current values in `update_vtuber_channel_by_name`,
+/// since that already has every field `UpdateFields` needs on hand.
+pub struct UpdateOverrides {
+    pub name: Option<String>,
+    pub english_name: Option<String>,
+    pub photo: Option<String>,
+    pub org: Option<String>,
+    pub suborg: Option<String>,
+    pub track: bool,
+    pub untrack: bool,
+}
+
+/// Resolves `lookup_name` the same way `delete_vtuber_channel` and
+/// `sync_vtuber_channels` do (first match wins), layers `overrides` onto
+/// the current record via struct update syntax, and returns the resulting
+/// state for the caller to print — no second fetch needed, since
+/// `lookup_by_name` already returns every field an update can touch.
+pub async fn update_vtuber_channel_by_name(
+    lookup_name: &str,
+    overrides: UpdateOverrides,
+) -> Result<VtuberChannel, ApiError> {
+    let vtubers = lookup_by_name(lookup_name).await?;
+    let v = vtubers.into_iter().next().ok_or_else(|| {
+        ApiError::Invalid(format!("No VTuber matching '{}' found", lookup_name))
+    })?;
+
+    let v = VtuberChannel {
+        name: overrides.name.unwrap_or(v.name),
+        english_name: overrides.english_name.unwrap_or(v.english_name),
+        photo: overrides.photo.unwrap_or(v.photo),
+        org: overrides.org.or(v.org),
+        suborg: overrides.suborg.or(v.suborg),
+        is_tracked: if overrides.track {
+            true
+        } else if overrides.untrack {
+            false
+        } else {
+            v.is_tracked
+        },
+        ..v
+    };
+
+    let fields = UpdateFields {
+        name: v.name.clone(),
+        english_name: v.english_name.clone(),
+        photo: v.photo.clone(),
+        org: v.org.clone().unwrap_or_default(),
+        suborg: v.suborg.clone().unwrap_or_default(),
+        is_tracked: v.is_tracked,
+    };
+
+    update_vtuber_channel(&v.id, fields).await?;
+    Ok(v)
+}
+
 pub async fn update_vtuber_channel(id: &str, fields: UpdateFields) -> Result<(), ApiError> {
     let body = UpdateVtuberChannelBody {
         name: fields.name,

@@ -90,6 +90,33 @@ enum Commands {
         #[arg(long)]
         notify_existing: bool,
     },
+    /// Update fields on an existing VTuber channel
+    #[command(alias = "u")]
+    Update {
+        /// Name (or partial name) of the VTuber to update
+        name: String,
+        /// New display name
+        #[arg(long = "name")]
+        new_name: Option<String>,
+        /// New English name
+        #[arg(long)]
+        english_name: Option<String>,
+        /// New photo URL
+        #[arg(long)]
+        photo: Option<String>,
+        /// New org
+        #[arg(long)]
+        org: Option<String>,
+        /// New suborg
+        #[arg(long)]
+        suborg: Option<String>,
+        /// Mark the channel as tracked
+        #[arg(long, conflicts_with = "untrack")]
+        track: bool,
+        /// Mark the channel as untracked
+        #[arg(long)]
+        untrack: bool,
+    },
     /// Browse tracked VTubers in a full-screen terminal UI
     #[command(alias = "t")]
     Tui,
@@ -294,6 +321,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 notify_existing,
             })
             .await?;
+        }
+        Commands::Update { .. } => {
+            todo!("wired in task 5 (routes.rs support lands in task 4)")
         }
         Commands::Tui => tui::run().await?,
         Commands::Config => {
