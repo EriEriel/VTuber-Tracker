@@ -102,9 +102,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Jump { name } => jump_to(&name).await?,
+        Commands::Jump { name } => {
+            if let Err(err) = jump_to(&name).await {
+                eprintln!("Failed to jump to '{name}': {err}");
+                std::process::exit(1);
+            }
+        }
         Commands::List => {
-            let vtubers = fetch_vtubers().await?;
+            let vtubers = match fetch_vtubers().await {
+                Ok(vtubers) => vtubers,
+                Err(err) => {
+                    eprintln!("Failed to list VTuber channels: {err}");
+                    std::process::exit(1);
+                }
+            };
             vtubers.iter().for_each(|v| {
                 println!(
                     "{} ({}) - {}",
@@ -119,7 +130,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => println!("Failed to create VTuber channel from {url}: {err}"),
         },
         Commands::Lookup { name, limit } => {
-            let vtubers = lookup_by_name(&name).await?;
+            let vtubers = match lookup_by_name(&name).await {
+                Ok(vtubers) => vtubers,
+                Err(err) => {
+                    eprintln!("Failed to look up '{name}': {err}");
+                    std::process::exit(1);
+                }
+            };
             if vtubers.is_empty() {
                 println!("No VTuber matching '{}' found", name);
             }
@@ -138,7 +155,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("  (could not render thumbnail: {err})");
                 }
 
-                let detail = fetch_vtuber_detail(&v.id).await?;
+                let detail = match fetch_vtuber_detail(&v.id).await {
+                    Ok(detail) => detail,
+                    Err(err) => {
+                        eprintln!(
+                            "Failed to fetch details for '{}': {err}",
+                            v.english_name
+                        );
+                        std::process::exit(1);
+                    }
+                };
                 let is_live = detail.streams.iter().any(|s| s.status == "live");
                 println!("  {} {}", theme::heading("Status:"), theme::live_status(is_live));
 
@@ -211,7 +237,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => println!("Failed to sync VTuber channel '{name}': {err}"),
         },
         Commands::Live => {
-            let live = fetch_live_vtubers().await?;
+            let live = match fetch_live_vtubers().await {
+                Ok(live) => live,
+                Err(err) => {
+                    eprintln!("Failed to fetch live VTubers: {err}");
+                    std::process::exit(1);
+                }
+            };
             if live.is_empty() {
                 println!("{}", theme::muted("No VTuber is currently live"));
             }
