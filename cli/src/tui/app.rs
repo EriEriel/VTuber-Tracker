@@ -679,9 +679,19 @@ impl App {
     /// `cycle()` would otherwise only fix on the *next* keypress.
     fn ensure_selection_valid(&mut self) {
         let len = self.visible_ids().len();
-        let still_valid = matches!(self.list_state.selected(), Some(i) if i < len);
-        if !still_valid {
-            self.list_state.select(if len > 0 { Some(0) } else { None });
+        if len == 0 {
+            self.list_state.select(None);
+            return;
+        }
+        match self.list_state.selected() {
+            // Still in range — keep the cursor where it is.
+            Some(i) if i < len => {}
+            // The list shrank out from under the cursor (deleted the last
+            // row, filter narrowed) — land on the new last item, not the
+            // top, so the cursor stays near where the user was working.
+            Some(_) => self.list_state.select(Some(len - 1)),
+            // Nothing selected yet (first load) — start at the top.
+            None => self.list_state.select(Some(0)),
         }
     }
 
