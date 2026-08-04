@@ -1143,10 +1143,12 @@ impl App {
 
     pub fn set_items(&mut self, items: Vec<VtuberRow>) {
         self.load_state = LoadState::Loaded;
-        if !items.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        // Items must be assigned before the selection check — it measures
+        // the *new* list via `visible_ids()`. Keeping the index (rather than
+        // resetting to 0) is what stops every post-action refresh from
+        // yanking the cursor back to the top.
         self.items = items;
+        self.ensure_selection_valid();
     }
 
     pub fn set_error(&mut self, msg: String) {
